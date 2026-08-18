@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "medusa build",
-    "start": "medusa build && echo '--- ADMIN BUILD DIR ---' && find .medusa/server/public -maxdepth 3 2>&1 && echo '--- END ---' && medusa start",
+    "start": "medusa build && cd .medusa/server && npx medusa start",
     "dev": "medusa develop",
     "lint": "medusa lint",
     "test:integration:http": "TEST_TYPE=integration:http NODE_OPTIONS=--experimental-vm-modules jest --silent=false --runInBand --forceExit",
