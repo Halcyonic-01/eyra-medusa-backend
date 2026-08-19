@@ -50,5 +50,23 @@ module.exports = defineConfig({
         ],
       },
     },
+    {
+      resolve: '@medusajs/medusa/fulfillment',
+      options: {
+        providers: [
+          {
+            resolve: './src/modules/shiprocket-fulfillment',
+            id: 'shiprocket',
+            options: {
+              apiToken: process.env.SHIPROCKET_API_TOKEN,
+              pickupPincode: process.env.SHIPROCKET_PICKUP_PINCODE,
+              // Applied whenever Shiprocket is unconfigured or unreachable —
+              // keeps checkout from hard-failing on a rate-lookup outage.
+              fallbackRate: Number(process.env.SHIPPING_FALLBACK_RATE ?? 79),
+            },
+          },
+        ],
+      },
+    },
   ],
 })
