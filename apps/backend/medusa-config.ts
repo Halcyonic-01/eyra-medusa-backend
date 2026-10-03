@@ -54,6 +54,13 @@ module.exports = defineConfig({
       resolve: '@medusajs/medusa/fulfillment',
       options: {
         providers: [
+          // Declaring `providers` replaces Medusa's default, so the manual
+          // provider must be listed explicitly. The seed script's flat-rate
+          // shipping option depends on it (manual_manual).
+          {
+            resolve: '@medusajs/medusa/fulfillment-manual',
+            id: 'manual',
+          },
           {
             resolve: './src/modules/shiprocket-fulfillment',
             id: 'shiprocket',
