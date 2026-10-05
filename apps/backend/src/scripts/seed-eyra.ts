@@ -3,10 +3,10 @@
  *
  * Run with: npx medusa exec ./src/scripts/seed-eyra.ts
  *
- * Populates the 12 products that were previously hardcoded as mock data in
+ * Populates the 9 products that were previously hardcoded as mock data in
  * the frontend's lib/products.ts, shaped exactly as apps' storefront
  * lib/medusa.ts expects:
- *   - product.type.value      → "ring" | "chain" | "earring" (normalizeType)
+ *   - product.type.value      → "ring" | "chain" (normalizeType)
  *   - product.tags[].value    → spec badges (toDetailProduct)
  *   - product option "Size"   → ring size picker + sizeVariantMap (rings only)
  *   - product.metadata        → rating, review_count
@@ -47,17 +47,15 @@ import {
 
 /* ── Product data (ported from the frontend's lib/products.ts) ────────── */
 
-type ProductType = "ring" | "chain" | "earring";
+type ProductType = "ring" | "chain";
 
 const RING_SIZES = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 const RING_SPECS = ["925 Sterling", "Hallmarked", "BIS Certified", "Anti-tarnish"];
 const CHAIN_SPECS = ["925 Sterling", "Nickel Free", "Hallmarked", "Anti-tarnish"];
-const EARRING_SPECS = ["925 Sterling", "Anti-tarnish", "Hypoallergenic", "Hallmarked"];
 
 // Matches config/storeConfig.ts's itemWeightsG on the frontend, in grams.
 const TYPE_WEIGHT_G: Record<ProductType, number> = {
   ring: 6,
-  earring: 6,
   chain: 15,
 };
 
@@ -82,25 +80,21 @@ const PRODUCTS: SeedProduct[] = [
   { handle: "eyra-signature-silver-ring", name: "Eyra Signature Silver Ring", price: 2499, originalPrice: 4499, description: "Crafted in premium 925 sterling silver with a sleek minimal finish designed for timeless elegance.", images: ["product-1.jpg", "product-2.jpg", "collection-1.jpg", "product-3.jpg"], inStock: 15, type: "ring", rating: 4.4, reviewCount: 128 },
   { handle: "celestial-band-ring", name: "Celestial Band Ring", price: 1899, originalPrice: 3299, description: "Delicately textured band in 925 sterling silver, perfect for everyday stacking and layering.", images: ["product-2.jpg", "product-1.jpg", "collection-2.jpg", "product-4.jpg"], inStock: 8, type: "ring", rating: 4.2, reviewCount: 84 },
   { handle: "serpentine-silver-chain", name: "Serpentine Silver Chain", price: 3299, originalPrice: 5499, description: "A bold serpentine-link chain in 925 sterling silver, engineered for modern luxury and durability.", images: ["product-3.jpg", "product-1.jpg", "collection-3.jpg", "product-5.jpg"], inStock: 12, type: "chain", rating: 4.6, reviewCount: 210 },
-  { handle: "halo-drop-earrings", name: "Halo Drop Earrings", price: 1299, originalPrice: 2499, description: "Lightweight sterling silver drop earrings with a polished halo frame, perfect for day to evening.", images: ["product-4.jpg", "product-5.jpg", "collection-1.jpg", "product-2.jpg"], inStock: 20, type: "earring", rating: 4.5, reviewCount: 176 },
-  { handle: "crescent-stud-earrings", name: "Crescent Stud Earrings", price: 2199, originalPrice: 3999, description: "Minimalist crescent-shaped studs in 925 sterling silver — effortlessly chic for any occasion.", images: ["product-5.jpg", "product-4.jpg", "collection-2.jpg", "product-1.jpg"], inStock: 18, type: "earring", rating: 4.3, reviewCount: 99 },
   { handle: "sovereign-signet-ring", name: "Sovereign Signet Ring", price: 4999, originalPrice: 7499, description: "A heavy-gauge signet ring in pure 925 sterling silver, hand-polished to a mirror finish.", images: ["product-1.jpg", "product-3.jpg", "collection-3.jpg", "product-2.jpg"], inStock: 5, type: "ring", rating: 4.7, reviewCount: 62 },
   { handle: "rope-twist-chain", name: "Rope Twist Chain", price: 1499, originalPrice: 2799, description: "Classic rope-twist link chain in 925 sterling silver, timeless and versatile for all looks.", images: ["product-2.jpg", "product-3.jpg", "collection-1.jpg", "product-5.jpg"], inStock: 30, type: "chain", rating: 4.1, reviewCount: 145 },
   { handle: "figaro-link-chain", name: "Figaro Link Chain", price: 2799, originalPrice: 4799, description: "The iconic Figaro pattern reimagined in sterling silver — a staple for the modern wardrobe.", images: ["product-3.jpg", "product-2.jpg", "collection-2.jpg", "product-4.jpg"], inStock: 14, type: "chain", rating: 4.4, reviewCount: 88 },
   { handle: "eternity-stacking-ring", name: "Eternity Stacking Ring", price: 3499, originalPrice: 5999, description: "A slim eternity band set with hand-placed cubic zirconia in gleaming 925 sterling silver.", images: ["product-4.jpg", "product-1.jpg", "collection-3.jpg", "product-3.jpg"], inStock: 7, type: "ring", rating: 4.8, reviewCount: 203 },
-  { handle: "luna-ear-cuff", name: "Luna Ear Cuff", price: 1199, originalPrice: 2199, description: "An adjustable ear cuff in sterling silver that adds edge and dimension without a piercing.", images: ["product-5.jpg", "product-4.jpg", "collection-1.jpg", "product-1.jpg"], inStock: 25, type: "earring", rating: 4.0, reviewCount: 57 },
   { handle: "geometric-dome-ring", name: "Geometric Dome Ring", price: 2999, originalPrice: 5299, description: "An architectural dome ring in 925 sterling silver, a statement piece for the design-forward.", images: ["product-1.jpg", "product-5.jpg", "collection-2.jpg", "product-2.jpg"], inStock: 9, type: "ring", rating: 4.5, reviewCount: 111 },
   { handle: "box-link-statement-chain", name: "Box Link Statement Chain", price: 5499, originalPrice: 8999, description: "Chunky box-link chain in heavyweight 925 sterling silver — bold, structural, and unforgettable.", images: ["product-2.jpg", "product-3.jpg", "collection-3.jpg", "product-4.jpg"], inStock: 4, type: "chain", rating: 4.6, reviewCount: 74 },
 ];
 
 const ALL_SPECS = Array.from(
-  new Set([...RING_SPECS, ...CHAIN_SPECS, ...EARRING_SPECS])
+  new Set([...RING_SPECS, ...CHAIN_SPECS])
 );
 
 function specsFor(type: ProductType): string[] {
   if (type === "ring") return RING_SPECS;
-  if (type === "chain") return CHAIN_SPECS;
-  return EARRING_SPECS;
+  return CHAIN_SPECS;
 }
 
 /** Spreads a product's total mock stock across its variants, summing back to (near) the original. */
@@ -249,7 +243,7 @@ export default async function seedEyra({ container }: { container: MedusaContain
 
   logger.info("Seeding product types and tags...");
   const { result: typeResult } = await createProductTypesWorkflow(container).run({
-    input: { product_types: [{ value: "ring" }, { value: "chain" }, { value: "earring" }] },
+    input: { product_types: [{ value: "ring" }, { value: "chain" }] },
   });
   const typeIdByValue = new Map(typeResult.map((t) => [t.value, t.id]));
 
