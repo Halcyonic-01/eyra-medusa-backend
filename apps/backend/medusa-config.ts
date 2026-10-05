@@ -24,6 +24,12 @@ module.exports = defineConfig({
   plugins: ['medusa-plugin-razorpay-v2'],
   modules: [
     {
+      resolve: './src/modules/wallet',
+    },
+    {
+      resolve: './src/modules/return-request',
+    },
+    {
       resolve: '@medusajs/medusa/payment',
       dependencies: [Modules.PAYMENT, ContainerRegistrationKeys.LOGGER],
       options: {
