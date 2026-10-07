@@ -30,6 +30,9 @@ module.exports = defineConfig({
       resolve: './src/modules/return-request',
     },
     {
+      resolve: './src/modules/order-dispatch',
+    },
+    {
       resolve: '@medusajs/medusa/payment',
       dependencies: [Modules.PAYMENT, ContainerRegistrationKeys.LOGGER],
       options: {

@@ -18,6 +18,8 @@ import { updateWalletBalanceStep } from "./steps/update-wallet-balance"
 
 export type RefundWalletForOrderInput = {
   order_id: string
+  /** Set to false when another email already tells the customer, to avoid sending two. */
+  notify?: boolean
 }
 
 /**
@@ -69,22 +71,28 @@ export const refundWalletForOrderWorkflow = createWorkflow(
         }))
       )
 
+      return transaction
+    })
+
+    when(
+      "announce-refund",
+      { input, refunded },
+      (data) => Boolean(data.refunded) && data.input.notify !== false
+    ).then(() => {
       emitEventStep({
         eventName: "wallet.credit_added",
-        data: transform({ input, wallet, transaction }, (data) => ({
+        data: transform({ input, wallet, refunded }, (data) => ({
           kind: "refunded",
           wallet_id: data.wallet!.id,
           customer_id: data.wallet!.customer_id,
-          amount: data.transaction.amount,
-          balance: data.transaction.balance_after,
-          expires_at: data.transaction.expires_at,
+          amount: data.refunded!.amount,
+          balance: data.refunded!.balance_after,
+          expires_at: data.refunded!.expires_at,
           reason: "cancellation",
           order_id: data.input.order_id,
           note: "Order cancelled",
         })),
       })
-
-      return transaction
     })
 
     releaseLockStep({ key: lockKey })

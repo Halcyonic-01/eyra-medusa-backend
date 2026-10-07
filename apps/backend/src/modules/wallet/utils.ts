@@ -25,3 +25,8 @@ export function refundReference(orderId: string): string {
 export function expiryReference(lotId: string): string {
   return `expire:${lotId}`
 }
+
+/** Idempotency key for the ledger row that records money refunded to the wallet on a cancellation. */
+export function cancellationRefundReference(orderId: string): string {
+  return `cancel-refund:${orderId}`
+}
