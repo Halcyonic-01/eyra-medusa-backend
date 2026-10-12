@@ -51,6 +51,10 @@ export type StorefrontReply =
 /**
  * Like postToStorefront, but hands back what the storefront answered, for
  * calls whose result matters (creating a shipment). Never throws.
+ *
+ * Creating a shipment spends Shiprocket wallet money, so it is sent with its
+ * own secret, STOREFRONT_SHIPMENT_SECRET (header x-shipment-secret), when set.
+ * Set it on the storefront at the same time, or shipments are refused.
  */
 export async function callStorefront(
   path: string,
@@ -58,7 +62,8 @@ export async function callStorefront(
   options: { timeoutMs?: number } = {}
 ): Promise<StorefrontReply> {
   const revalidateUrl = process.env.STOREFRONT_REVALIDATE_URL
-  const secret = process.env.STOREFRONT_REVALIDATE_SECRET
+  const shipmentSecret = process.env.STOREFRONT_SHIPMENT_SECRET
+  const secret = shipmentSecret || process.env.STOREFRONT_REVALIDATE_SECRET
   if (!revalidateUrl || !secret) {
     return {
       kind: "skipped",
@@ -71,7 +76,7 @@ export async function callStorefront(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-revalidate-secret": secret,
+        [shipmentSecret ? "x-shipment-secret" : "x-revalidate-secret"]: secret,
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(options.timeoutMs ?? 60000),

@@ -35,6 +35,9 @@ export function dispatchConfigProblems(): string[] {
   if (!process.env.STOREFRONT_REVALIDATE_SECRET) {
     problems.push("STOREFRONT_REVALIDATE_SECRET is not set, so shipments cannot be created and no team emails are sent")
   }
+  if (!process.env.STOREFRONT_SHIPMENT_SECRET) {
+    problems.push("STOREFRONT_SHIPMENT_SECRET is not set, so shipments are created with the shared secret instead of their own")
+  }
   return problems
 }
 
