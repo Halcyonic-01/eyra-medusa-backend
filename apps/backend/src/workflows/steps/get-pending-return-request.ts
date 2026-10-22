@@ -7,6 +7,8 @@ import { toNumber } from "../../modules/wallet/utils"
 
 type Input = {
   request_id: string
+  /** The statuses a decision may still be made from. Defaults to the ones staff can approve from. */
+  allowed?: string[]
 }
 
 export type PendingReturnRequest = {
@@ -28,7 +30,8 @@ export const getPendingReturnRequestStep = createStep(
     if (!request) {
       throw new MedusaError(MedusaError.Types.NOT_FOUND, "Request was not found")
     }
-    if (request.status !== "pending") {
+    const allowed = input.allowed ?? ["pending", "reverse_pickup_scheduled", "awaiting_inspection"]
+    if (!allowed.includes(request.status)) {
       throw new MedusaError(
         MedusaError.Types.NOT_ALLOWED,
         `This request was already ${request.status}`

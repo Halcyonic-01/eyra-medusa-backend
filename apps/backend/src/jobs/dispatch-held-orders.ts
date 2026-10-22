@@ -7,6 +7,7 @@ import {
 } from "../modules/order-dispatch/config"
 import { ORDER_DISPATCH_MODULE } from "../modules/order-dispatch"
 import { dispatchConfigProblems } from "../modules/order-dispatch/config"
+import { storefrontShiprocketProblems } from "../utils/storefront-status"
 import { findOrdersMissingDispatch, findUncapturedPrepaidOrders } from "../modules/order-dispatch/missing-dispatches"
 import type OrderDispatchModuleService from "../modules/order-dispatch/service"
 import { postToStorefront } from "../utils/storefront"
@@ -31,7 +32,7 @@ export default async function dispatchHeldOrders(container: MedusaContainer) {
   const service: OrderDispatchModuleService = container.resolve(ORDER_DISPATCH_MODULE)
 
   try {
-    warnAboutConfig(logger)
+    await warnAboutConfig(logger)
     await recoverStalledDispatchesWorkflow(container).run({})
     await recoverMissingDispatches(container)
     await alertUncapturedPayments(container)
@@ -65,9 +66,12 @@ export default async function dispatchHeldOrders(container: MedusaContainer) {
 let lastConfigWarning = 0
 
 /** Missing settings stop shipping and alerts alike, so the log is the only place left to say so. */
-function warnAboutConfig(logger: { error: (message: string) => void }) {
-  const problems = dispatchConfigProblems()
-  if (problems.length === 0 || Date.now() - lastConfigWarning < 60 * 60 * 1000) {
+async function warnAboutConfig(logger: { error: (message: string) => void }) {
+  if (Date.now() - lastConfigWarning < 60 * 60 * 1000) {
+    return
+  }
+  const problems = [...dispatchConfigProblems(), ...(await storefrontShiprocketProblems())]
+  if (problems.length === 0) {
     return
   }
   lastConfigWarning = Date.now()

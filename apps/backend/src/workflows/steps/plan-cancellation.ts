@@ -28,9 +28,10 @@ export type PlannedCancellation = {
 }
 
 /**
- * Decides whether the customer may cancel and exactly what they get back. It
- * refuses before anything is changed: wrong owner, shipment already created,
- * window closed, or a refund choice that does not apply.
+ * Decides whether the customer may cancel and exactly what they get back: the
+ * whole amount paid online, to the payment method it came from. It refuses
+ * before anything is changed: wrong owner, shipment already created, window
+ * closed, or a payment that cannot be refunded online.
  */
 export const planCancellationStep = createStep(
   "plan-cancellation",
@@ -52,28 +53,30 @@ export const planCancellationStep = createStep(
 
     const plan = planCancellation(input.context, cancellationFee())
 
-    if (!plan.requires_choice) {
+    if (plan.paid_online <= 0) {
       const planned: PlannedCancellation = { method: "none", refund_amount: 0, fee: 0, plan }
       return new StepResponse(planned)
     }
 
-    if (input.refund_method !== "wallet" && input.refund_method !== "original") {
+    // Money goes back where it came from. A request for the wallet is refused,
+    // not quietly changed, so nobody is surprised where their refund went.
+    if (input.refund_method === "wallet") {
       throw new MedusaError(
         MedusaError.Types.INVALID_DATA,
-        "Choose where the refund should go: your wallet or the original payment method.",
-        "refund_method_required"
-      )
-    }
-
-    const option = input.refund_method === "wallet" ? plan.wallet : plan.original
-    if (!option || !option.available) {
-      throw new MedusaError(
-        MedusaError.Types.NOT_ALLOWED,
-        option?.unavailable_reason ?? "That refund option is not available for this order.",
+        "Refunds go back to the payment method the order was paid with.",
         "refund_method_unavailable"
       )
     }
-    if (input.refund_method === "original" && input.context.online_payments.length !== 1) {
+
+    const option = plan.original
+    if (!option || !option.available) {
+      throw new MedusaError(
+        MedusaError.Types.NOT_ALLOWED,
+        option?.unavailable_reason ?? "This order can't be refunded online. Please contact support.",
+        "refund_method_unavailable"
+      )
+    }
+    if (input.context.online_payments.length !== 1) {
       // Orders here are paid with one online payment; anything else needs a person.
       throw new MedusaError(
         MedusaError.Types.NOT_ALLOWED,
@@ -83,7 +86,7 @@ export const planCancellationStep = createStep(
     }
 
     const planned: PlannedCancellation = {
-      method: input.refund_method,
+      method: "original",
       refund_amount: option.amount,
       fee: option.fee,
       plan,

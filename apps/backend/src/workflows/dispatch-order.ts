@@ -5,7 +5,7 @@ import {
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk"
 import { useQueryGraphStep } from "@medusajs/medusa/core-flows"
-import { buildShipmentRequestStep } from "./steps/build-shipment-request"
+import { buildShipmentRequestStep, SHIPMENT_ORDER_FIELDS } from "./steps/build-shipment-request"
 import { claimDispatchStep } from "./steps/claim-dispatch"
 import { finishDispatchStep } from "./steps/finish-dispatch"
 import { mirrorDispatchToOrderStep } from "./steps/mirror-dispatch-to-order"
@@ -31,25 +31,7 @@ export const dispatchOrderWorkflow = createWorkflow(
     const finished = when("order-claimed", claim, (data) => data.claimed).then(() => {
       const { data: orders } = useQueryGraphStep({
         entity: "order",
-        fields: [
-          "id",
-          "display_id",
-          "email",
-          "status",
-          "canceled_at",
-          "total",
-          "metadata",
-          "items.title",
-          "items.product_title",
-          "items.variant_sku",
-          "items.product_type",
-          "items.unit_price",
-          "items.quantity",
-          "items.detail.quantity",
-          "shipping_address.*",
-          "credit_lines.amount",
-          "payment_collections.payments.provider_id",
-        ],
+        fields: SHIPMENT_ORDER_FIELDS,
         filters: { id: input.order_id },
       })
 

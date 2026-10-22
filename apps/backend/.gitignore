@@ -2,6 +2,8 @@
 .env
 .DS_Store
 /uploads
+# Medusa's local file storage (development only; production uses S3)
+/static
 /node_modules
 yarn-error.log
 

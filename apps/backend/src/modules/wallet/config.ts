@@ -1,15 +1,16 @@
 /**
  * How long wallet credit stays usable, in months, counted from the day it is
  * issued. Set WALLET_CREDIT_VALIDITY_MONTHS to change it; 0 means credit never
- * expires. Defaults to 6 months.
+ * expires. Defaults to 12 months, which is what store credit from a return or an
+ * exchange is promised.
  */
 export function creditValidityMonths(): number {
   const raw = process.env.WALLET_CREDIT_VALIDITY_MONTHS
   if (raw === undefined || raw.trim() === "") {
-    return 6
+    return 12
   }
   const months = Number(raw)
-  return Number.isInteger(months) && months >= 0 ? months : 6
+  return Number.isInteger(months) && months >= 0 ? months : 12
 }
 
 /** Adds calendar months, clamping to the month's last day (31 Aug + 6 = 28 Feb). */

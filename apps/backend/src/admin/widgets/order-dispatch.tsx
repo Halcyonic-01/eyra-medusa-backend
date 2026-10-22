@@ -294,6 +294,22 @@ const OrderDispatchWidget = ({ data: order }: DetailWidgetProps<AdminOrder>) => 
               <Text size="small" leading="compact" weight="plus">
                 {dispatch.invoice_number}
               </Text>
+              <div className="flex justify-end gap-3">
+                <a
+                  href={`/admin/orders/${order.id}/invoice`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="txt-small text-ui-fg-interactive"
+                >
+                  View PDF
+                </a>
+                <a
+                  href={`/admin/orders/${order.id}/invoice?download=1`}
+                  className="txt-small text-ui-fg-interactive"
+                >
+                  Download
+                </a>
+              </div>
             </Row>
           )}
           {dispatch.last_error && (

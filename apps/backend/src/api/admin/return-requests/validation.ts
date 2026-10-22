@@ -1,17 +1,13 @@
 import { MedusaError } from "@medusajs/framework/utils"
+import { RETURN_REASON_CODES, RETURN_STATUSES } from "../../../modules/return-request/constants"
 import { MAX_CREDIT_AMOUNT } from "../wallets/validation"
 
 /** Request validation for the return and exchange request routes. */
 
 const TYPES = ["return", "exchange"] as const
-const REASONS = [
-  "wrong_size",
-  "damaged_or_defective",
-  "not_as_described",
-  "changed_mind",
-  "other",
-] as const
-const STATUSES = ["pending", "approved", "rejected"] as const
+// New requests use the four reason codes; older values still exist on old requests.
+const REASONS = RETURN_REASON_CODES
+const STATUSES = RETURN_STATUSES
 
 function invalid(message: string): never {
   throw new MedusaError(MedusaError.Types.INVALID_DATA, `Invalid request: ${message}`)
@@ -59,6 +55,8 @@ export type CreateReturnRequestBody = {
   type: (typeof TYPES)[number]
   reason: (typeof REASONS)[number]
   note?: string
+  /** An exchange: the variant wanted instead. */
+  replacement_variant_id?: string
   items: { item_id: string; quantity: number }[]
 }
 
@@ -77,12 +75,21 @@ export function parseCreateReturnRequest(body: unknown): CreateReturnRequestBody
     return { item_id: id(row, "item_id", "ordli_"), quantity: quantity as number }
   })
 
+  const type = oneOf(source.type, "type", TYPES)
+  const replacement =
+    source.replacement_variant_id === undefined || source.replacement_variant_id === null || source.replacement_variant_id === ""
+      ? undefined
+      : id(source, "replacement_variant_id", "variant_")
+  if (type === "exchange" && !replacement) invalid("'replacement_variant_id' is required for an exchange")
+  if (type === "return" && replacement) invalid("'replacement_variant_id' is only for an exchange")
+
   return {
     customer_id: id(source, "customer_id", "cus_"),
     order_id: id(source, "order_id", "order_"),
-    type: oneOf(source.type, "type", TYPES),
+    type,
     reason: oneOf(source.reason, "reason", REASONS),
     note: text(source.note, "note", 1000),
+    ...(replacement ? { replacement_variant_id: replacement } : {}),
     items,
   }
 }

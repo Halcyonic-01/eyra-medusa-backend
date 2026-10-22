@@ -1,3 +1,5 @@
+import { fileStorageProblems } from "../../utils/file-storage"
+import { jwtExpiry } from "../../utils/jwt-expiry"
 /**
  * Settings for holding an order before its shipment is created. They are read
  * each time, so they can change without a code change.
@@ -23,9 +25,10 @@ export function holdMinutes(): number {
 }
 
 /**
- * Settings without which orders cannot ship or the team cannot be told. Both
- * go through the storefront, so when these are missing nothing is emailed
- * either: they are shown in the admin and written to the log.
+ * Settings without which orders cannot ship, the team cannot be told, or files
+ * such as invoice PDFs would be lost. The first go through the storefront, so
+ * when they are missing nothing is emailed either: all are shown in the admin
+ * and written to the log.
  */
 export function dispatchConfigProblems(): string[] {
   const problems: string[] = []
@@ -37,6 +40,17 @@ export function dispatchConfigProblems(): string[] {
   }
   if (!process.env.STOREFRONT_SHIPMENT_SECRET) {
     problems.push("STOREFRONT_SHIPMENT_SECRET is not set, so shipments are created with the shared secret instead of their own")
+  }
+  problems.push(...fileStorageProblems(process.env))
+
+  // The backend's own Shiprocket token only prices live courier rates, which
+  // customers are not charged (prepaid ships free, Cash on Delivery has its own
+  // charge), so an expired one costs nothing but the rate estimate.
+  const rateTokenExpiry = jwtExpiry(process.env.SHIPROCKET_API_TOKEN)
+  if (rateTokenExpiry && rateTokenExpiry.getTime() <= Date.now()) {
+    problems.push(
+      `SHIPROCKET_API_TOKEN on the backend expired on ${rateTokenExpiry.toISOString().slice(0, 10)}. Live courier rates fall back to the fixed estimate; customer shipping charges are not affected.`
+    )
   }
   return problems
 }
@@ -59,14 +73,13 @@ export function invoicePrefix(): string {
   return /^[A-Z0-9]{1,6}$/.test(raw) ? raw : "EYRA"
 }
 
-/** What a customer pays to have a refund sent to the original payment method. */
+/**
+ * What is kept when an order is cancelled before it ships: nothing. A cancelled
+ * order is refunded in full, to the payment method it was paid with. (The ₹99
+ * reverse logistics fee applies only to parcels that already shipped.)
+ */
 export function cancellationFee(): number {
-  const raw = process.env.ORDER_CANCEL_FEE
-  if (raw === undefined || raw.trim() === "") {
-    return 100
-  }
-  const fee = Number(raw)
-  return Number.isFinite(fee) && fee >= 0 ? fee : 100
+  return 0
 }
 
 /** How long a refund to the original payment method takes, as shown to the customer. */

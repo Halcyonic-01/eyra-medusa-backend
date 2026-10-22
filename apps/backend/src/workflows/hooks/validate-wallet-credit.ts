@@ -1,5 +1,5 @@
 import { ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
-import { completeCartWorkflow } from "@medusajs/medusa/core-flows"
+import type { MedusaContainer } from "@medusajs/framework/types"
 import { WALLET_MODULE } from "../../modules/wallet"
 import { spendableBalance } from "../../modules/wallet/lots"
 import type WalletModuleService from "../../modules/wallet/service"
@@ -15,12 +15,12 @@ type CartCreditLine = {
 }
 
 /**
- * Last check before a cart becomes an order: any wallet credit on the cart
- * must still be there. The balance can change between applying credit and
+ * Wallet part of the last check before a cart becomes an order: any wallet
+ * credit on the cart must still be there. The balance can change between applying credit and
  * paying (a second order placed in another tab, for example), and an order
  * must never be placed on credit the customer no longer has.
  */
-completeCartWorkflow.hooks.validate(async ({ cart }, { container }) => {
+export async function validateWalletCredit(cart: { id: string }, container: MedusaContainer) {
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
   const walletService: WalletModuleService = container.resolve(WALLET_MODULE)
 
@@ -49,4 +49,4 @@ completeCartWorkflow.hooks.validate(async ({ cart }, { container }) => {
       )
     }
   }
-})
+}

@@ -17,7 +17,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { sdk } from "../../lib/client"
 
-type Status = "pending" | "approved" | "rejected"
+type Status =
+  | "pending"
+  | "pending_fee"
+  | "reverse_pickup_scheduled"
+  | "awaiting_inspection"
+  | "approved"
+  | "rejected"
 
 type ReturnRequest = {
   id: string
@@ -33,21 +39,54 @@ type ReturnRequest = {
   credit_amount: number | null
   resolution_note: string | null
   created_at: string
+  paid_value: number | null
+  fee_amount: number | null
+  reverse: { order_ref: string | null; awb: string | null; error: string | null }
+  exchange: {
+    replacement_title: string | null
+    price_difference: number | null
+    amount_due: number | null
+    fee_link_url: string | null
+    fee_paid_at: string | null
+    payment_required: boolean
+    replacement_order_id: string | null
+  } | null
+  credit_note_id: string | null
+  received_at: string | null
 }
 
 const STATUSES: { value: Status; label: string }[] = [
-  { value: "pending", label: "Pending" },
-  { value: "approved", label: "Approved" },
+  { value: "pending", label: "Needs us" },
+  { value: "pending_fee", label: "Waiting for payment" },
+  { value: "reverse_pickup_scheduled", label: "Pickup booked" },
+  { value: "awaiting_inspection", label: "To inspect" },
+  { value: "approved", label: "Completed" },
   { value: "rejected", label: "Declined" },
 ]
 
-const STATUS_COLORS: Record<Status, "orange" | "green" | "grey"> = {
+const STATUS_COLORS: Record<Status, "orange" | "green" | "grey" | "blue" | "purple"> = {
   pending: "orange",
+  pending_fee: "purple",
+  reverse_pickup_scheduled: "blue",
+  awaiting_inspection: "blue",
   approved: "green",
   rejected: "grey",
 }
 
+const STATUS_TEXT: Record<Status, string> = {
+  pending: "Needs us",
+  pending_fee: "Waiting for payment",
+  reverse_pickup_scheduled: "Pickup booked",
+  awaiting_inspection: "To inspect",
+  approved: "Completed",
+  rejected: "Declined",
+}
+
 const REASON_LABELS: Record<string, string> = {
+  SIZE_ISSUE: "Size issue",
+  DESIGN_PREFERENCE: "Design preference",
+  DAMAGED_IN_TRANSIT: "Damaged in transit (unboxing video needed)",
+  DEFECTIVE: "Defective (unboxing video needed)",
   wrong_size: "Wrong size",
   damaged_or_defective: "Damaged or defective",
   not_as_described: "Not as described",
@@ -231,8 +270,24 @@ const DecisionModal = ({
 }
 
 const ReturnRequestsPage = () => {
+  const queryClient = useQueryClient()
   const [status, setStatus] = useState<Status>("pending")
   const [decision, setDecision] = useState<{ request: ReturnRequest; mode: "approve" | "reject" } | null>(null)
+
+  const act = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "received" | "retry-pickup" }) =>
+      sdk.client.fetch(`/admin/return-requests/${id}/${action}`, { method: "POST", body: {} }),
+    onSuccess: (_data, { action }) => {
+      queryClient.invalidateQueries({ queryKey: ["return-requests"] })
+      queryClient.invalidateQueries({ queryKey: ["wallet"] })
+      toast.success(
+        action === "received"
+          ? "Marked received. The credit note and store credit (or the replacement) are being issued."
+          : "Pickup requested"
+      )
+    },
+    onError: (err: Error) => toast.error(err.message || "That did not work"),
+  })
 
   const { data, isLoading } = useQuery({
     queryKey: ["return-requests", status],
@@ -250,7 +305,9 @@ const ReturnRequestsPage = () => {
         <div className="px-6 py-4">
           <Heading level="h1">Return and exchange requests</Heading>
           <Text size="small" className="text-ui-fg-subtle">
-            Requests from customers. Approving one issues wallet credit for the amount you confirm.
+            Returns book the courier at once; when the item reaches you and passes the check, press Mark received and
+            the credit note, the store credit (item value less the ₹99 reverse fee, valid 12 months) or the
+            replacement for an exchange follow by themselves. Approve is only for older requests that wait for you.
           </Text>
         </div>
 
@@ -274,7 +331,7 @@ const ReturnRequestsPage = () => {
             </Text>
           ) : requests.length === 0 ? (
             <Text size="small" className="text-ui-fg-subtle">
-              No {status === "rejected" ? "declined" : status} requests.
+              No requests here.
             </Text>
           ) : (
             <Table>
@@ -301,15 +358,40 @@ const ReturnRequestsPage = () => {
                     <Table.Cell>
                       {request.items.map((item) => `${item.quantity} x ${item.title}`).join(", ")}
                     </Table.Cell>
-                    <Table.Cell>{rupees(request.items_total)}</Table.Cell>
+                    <Table.Cell>
+                      {rupees(request.paid_value ?? request.items_total)}
+                      {request.type === "return" && request.fee_amount ? (
+                        <Text size="xsmall" className="text-ui-fg-subtle">
+                          less {rupees(request.fee_amount)} fee
+                        </Text>
+                      ) : null}
+                    </Table.Cell>
                     <Table.Cell>
                       {REASON_LABELS[request.reason] ?? request.reason}
                       {request.note ? ` - ${request.note}` : ""}
                     </Table.Cell>
                     <Table.Cell>
                       <Badge size="2xsmall" color={STATUS_COLORS[request.status]}>
-                        {request.status === "rejected" ? "Declined" : request.status}
+                        {STATUS_TEXT[request.status] ?? request.status}
                       </Badge>
+                      {request.exchange && (
+                        <Text size="xsmall" className="text-ui-fg-subtle">
+                          For {request.exchange.replacement_title ?? "a replacement"}
+                          {request.exchange.payment_required
+                            ? `; difference ${rupees(request.exchange.amount_due ?? 0)}${request.exchange.fee_paid_at ? " (paid)" : " (to pay)"}`
+                            : "; no payment due"}
+                        </Text>
+                      )}
+                      {request.reverse.awb && (
+                        <Text size="xsmall" className="text-ui-fg-subtle">
+                          Pickup AWB {request.reverse.awb}
+                        </Text>
+                      )}
+                      {request.reverse.error && (
+                        <Text size="xsmall" className="text-ui-fg-error">
+                          {request.reverse.error}
+                        </Text>
+                      )}
                       {request.status === "approved" && request.credit_amount !== null && (
                         <Text size="xsmall" className="text-ui-fg-subtle">
                           {rupees(request.credit_amount)} credit
@@ -322,11 +404,33 @@ const ReturnRequestsPage = () => {
                       )}
                     </Table.Cell>
                     <Table.Cell>
-                      {request.status === "pending" && (
-                        <div className="flex items-center gap-x-2">
-                          <Button size="small" onClick={() => setDecision({ request, mode: "approve" })}>
-                            Approve
+                      <div className="flex items-center gap-x-2">
+                        {["pending", "reverse_pickup_scheduled", "awaiting_inspection"].includes(request.status) &&
+                          (request.type === "return" || !request.exchange?.payment_required || request.exchange?.fee_paid_at) && (
+                            <Button
+                              size="small"
+                              onClick={() => act.mutate({ id: request.id, action: "received" })}
+                              isLoading={act.isPending}
+                            >
+                              Mark received
+                            </Button>
+                          )}
+                        {request.status === "pending" && (request.type === "return" || !request.exchange?.payment_required || request.exchange?.fee_paid_at) && (
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            onClick={() => act.mutate({ id: request.id, action: "retry-pickup" })}
+                            isLoading={act.isPending}
+                          >
+                            Retry pickup
                           </Button>
+                        )}
+                        {request.status === "pending" && (
+                          <Button size="small" variant="secondary" onClick={() => setDecision({ request, mode: "approve" })}>
+                            Approve for an amount
+                          </Button>
+                        )}
+                        {["pending", "pending_fee", "reverse_pickup_scheduled", "awaiting_inspection"].includes(request.status) && (
                           <Button
                             size="small"
                             variant="secondary"
@@ -334,8 +438,8 @@ const ReturnRequestsPage = () => {
                           >
                             Decline
                           </Button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </Table.Cell>
                   </Table.Row>
                 ))}

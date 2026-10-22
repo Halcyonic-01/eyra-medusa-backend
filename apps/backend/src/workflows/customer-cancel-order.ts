@@ -9,16 +9,16 @@ export type CustomerCancelOrderInput = {
   order_id: string
   /** The signed-in customer asking, who must own the order. */
   customer_id: string
-  /** Where the money paid online should go. Needed only when something was paid online. */
+  /** Ignored except to refuse "wallet": refunds always go to the original payment method. */
   refund_method?: RefundMethod
   reason: CancelReason
   note?: string | null
 }
 
 /**
- * A customer cancels their own order before its shipment is created, and
- * chooses where the money they paid online goes: their wallet in full, or the
- * original payment method less the cancellation fee.
+ * A customer cancels their own order before its shipment is created. What they
+ * paid online is refunded in full, with no deduction, to the payment method it
+ * was paid with, and any wallet credit the order used goes back to the wallet.
  */
 export const customerCancelOrderWorkflow = createWorkflow(
   "customer-cancel-order",

@@ -54,6 +54,10 @@
           "primary": false,
           "nullable": false,
           "enumItems": [
+            "SIZE_ISSUE",
+            "DESIGN_PREFERENCE",
+            "DAMAGED_IN_TRANSIT",
+            "DEFECTIVE",
             "wrong_size",
             "damaged_or_defective",
             "not_as_described",
@@ -90,6 +94,9 @@
           "default": "'pending'",
           "enumItems": [
             "pending",
+            "pending_fee",
+            "reverse_pickup_scheduled",
+            "awaiting_inspection",
             "approved",
             "rejected"
           ],
@@ -132,8 +139,246 @@
           "length": 6,
           "mappedType": "datetime"
         },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
+        "paid_value": {
+          "name": "paid_value",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "decimal"
+        },
+        "fee_amount": {
+          "name": "fee_amount",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "decimal"
+        },
+        "reverse_order_ref": {
+          "name": "reverse_order_ref",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "reverse_shipment_id": {
+          "name": "reverse_shipment_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "reverse_awb": {
+          "name": "reverse_awb",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "reverse_requested_at": {
+          "name": "reverse_requested_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
+        "reverse_error": {
+          "name": "reverse_error",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "replacement_variant_id": {
+          "name": "replacement_variant_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "replacement_title": {
+          "name": "replacement_title",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "replacement_price": {
+          "name": "replacement_price",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "decimal"
+        },
+        "price_difference": {
+          "name": "price_difference",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "decimal"
+        },
+        "amount_due": {
+          "name": "amount_due",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "decimal"
+        },
+        "fee_link_id": {
+          "name": "fee_link_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "fee_link_url": {
+          "name": "fee_link_url",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "fee_paid_at": {
+          "name": "fee_paid_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
+        "fee_payment_id": {
+          "name": "fee_payment_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "replacement_order_id": {
+          "name": "replacement_order_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "credit_note_id": {
+          "name": "credit_note_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
+        "received_by": {
+          "name": "received_by",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
         "raw_credit_amount": {
           "name": "raw_credit_amount",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
+        "raw_paid_value": {
+          "name": "raw_paid_value",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
+        "raw_fee_amount": {
+          "name": "raw_fee_amount",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
+        "raw_replacement_price": {
+          "name": "raw_replacement_price",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
+        "raw_price_difference": {
+          "name": "raw_price_difference",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
+        "raw_amount_due": {
+          "name": "raw_amount_due",
           "type": "jsonb",
           "unsigned": false,
           "autoincrement": false,
@@ -212,6 +457,33 @@
           "primary": false,
           "unique": false,
           "expression": "CREATE INDEX IF NOT EXISTS \"IDX_return_request_status\" ON \"return_request\" (\"status\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_return_request_fee_link_id_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_return_request_fee_link_id_unique\" ON \"return_request\" (\"fee_link_id\") WHERE fee_link_id IS NOT NULL AND deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_return_request_reverse_order_ref_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_return_request_reverse_order_ref_unique\" ON \"return_request\" (\"reverse_order_ref\") WHERE reverse_order_ref IS NOT NULL AND deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_return_request_reverse_awb",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_return_request_reverse_awb\" ON \"return_request\" (\"reverse_awb\") WHERE reverse_awb IS NOT NULL AND deleted_at IS NULL"
         },
         {
           "keyName": "return_request_pkey",

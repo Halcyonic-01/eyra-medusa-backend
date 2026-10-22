@@ -25,7 +25,11 @@ export const rejectReturnRequestWorkflow = createWorkflow(
     const lockKey = transform({ input }, (data) => `return-request:${data.input.request_id}`)
     acquireLockStep({ key: lockKey, timeout: 30, ttl: 60 })
 
-    const request = getPendingReturnRequestStep({ request_id: input.request_id })
+    // A request can be declined from any state before it is finished, even one waiting for its fee.
+    const request = getPendingReturnRequestStep({
+      request_id: input.request_id,
+      allowed: ["pending", "pending_fee", "reverse_pickup_scheduled", "awaiting_inspection"],
+    })
 
     const resolved = resolveReturnRequestStep(
       transform({ input }, (data) => ({

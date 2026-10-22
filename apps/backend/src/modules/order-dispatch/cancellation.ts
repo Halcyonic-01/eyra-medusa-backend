@@ -61,7 +61,7 @@ export type CancellationPlan = {
   kind: PaymentKind
   paid_online: number
   wallet_used: number
-  /** True when the customer must choose where the online payment goes. */
+  /** Always false now: a refund goes back where the payment came from. Kept so older clients still read the preview. */
   requires_choice: boolean
   wallet: RefundOption | null
   original: RefundOption | null
@@ -78,10 +78,13 @@ export function paymentKind(ctx: Pick<CancellationContext, "paid_online" | "wall
 }
 
 /**
- * What a cancellation can refund, and to where. The wallet always gets the full
- * amount paid online. The original payment method gets that amount less the fee
- * (never more than the amount itself), and is only offered if something is left.
- * Wallet credit the order used is not part of this: it always returns in full.
+ * What a cancellation refunds, and to where. An order cancelled before it ships
+ * is refunded in full, with no deduction, to the payment method it was paid with:
+ * what was paid online goes back to that card or bank, and wallet credit the
+ * order used always returns to the wallet in full. There is nothing for the
+ * customer to choose, so `requires_choice` is false and there is no wallet
+ * option. `fee` is what a deduction would be (zero today) and is kept so the
+ * rule is stated in one place.
  */
 export function planCancellation(ctx: CancellationContext, fee: number): CancellationPlan {
   const kind = paymentKind(ctx)
@@ -105,14 +108,14 @@ export function planCancellation(ctx: CancellationContext, fee: number): Cancell
     kind,
     paid_online: paid,
     wallet_used: roundMoney(ctx.wallet_used),
-    requires_choice: true,
-    wallet: { method: "wallet", amount: paid, fee: 0, available: true },
+    requires_choice: false,
+    wallet: null,
     original: {
       method: "original",
       amount: toOriginal,
       fee: kept,
       available: toOriginal >= 1,
-      ...(toOriginal >= 1 ? {} : { unavailable_reason: "The amount paid is too small to refund after the cancellation fee" }),
+      ...(toOriginal >= 1 ? {} : { unavailable_reason: "The amount paid is too small to refund online" }),
     },
   }
 }
@@ -171,7 +174,8 @@ export function evaluateEligibility(
 export const BLOCK_MESSAGES: Record<BlockCode, string> = {
   not_your_order: "This order could not be found.",
   already_cancelled: "This order has already been cancelled.",
-  shipment_created: "The shipment has been created, so this order can't be cancelled now.",
+  shipment_created:
+    "The shipment has been created, so this order can't be cancelled now. If it has not reached you yet, you can refuse delivery at your door: the parcel comes back to us and your payment is refunded, less the ₹99 reverse logistics fee. Once it is delivered you can return or exchange it within 7 days.",
   preparing: "Your order is being prepared for shipping, so it can't be cancelled now.",
   not_trackable: "This order can't be cancelled online. Please contact support.",
   payment_not_settled: "Your payment is still being confirmed. Please try again in a few minutes.",

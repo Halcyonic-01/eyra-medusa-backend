@@ -4,7 +4,10 @@ export type RequestedItem = {
   title: string
   quantity: number
   unit_price: number
+  /** What the customer paid for these units, GST included, after their share of any discount. */
   total: number
+  variant_title?: string | null
+  sku?: string | null
 }
 
 // Medusa types a JSON column as an object, but the items are a list.
