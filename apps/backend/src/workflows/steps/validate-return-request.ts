@@ -4,13 +4,13 @@ import { ORDER_DISPATCH_MODULE } from "../../modules/order-dispatch"
 import type OrderDispatchModuleService from "../../modules/order-dispatch/service"
 import { RETURN_REQUEST_MODULE } from "../../modules/return-request"
 import { OPEN_STATUSES, RETURN_REASON_CODES, feeWaivedFor } from "../../modules/return-request/constants"
-import { deliveryStateOf, returnWindowEnds, withinReturnWindow } from "../../modules/return-request/eligibility"
+import { deliveryStateOf, returnWindowEnds, windowDaysFor, withinReturnWindow } from "../../modules/return-request/eligibility"
 import { fromStoredItems, type RequestedItem } from "../../modules/return-request/items"
 import { paidValueOf, paidValues } from "../../modules/return-request/pricing"
 import { loadReplacement } from "../../modules/return-request/replacement"
 import type ReturnRequestModuleService from "../../modules/return-request/service"
 import { roundMoney, toNumber } from "../../modules/wallet/utils"
-import { REVERSE_LOGISTICS_FEE, RETURN_WINDOW_DAYS } from "../../utils/tax-config"
+import { REVERSE_LOGISTICS_FEE } from "../../utils/tax-config"
 import { TOTE_SKU } from "../../utils/commerce-rules"
 
 type OrderItem = {
@@ -78,7 +78,7 @@ const NOT_YET = "You can return or exchange an item once it has been delivered."
  * Checks a request against the order it is about, and works out what it is for.
  *
  *  - the order is the customer's, shipped, and not cancelled;
- *  - it was delivered, and the request is inside the 7 days after delivery (when
+ *  - it was delivered, and the request is inside the window after delivery (15 days for a return, 7 for an exchange; when
  *    delivery cannot be confirmed at all the request is still taken, for our
  *    team to check by hand, as before);
  *  - the reason is one of the four on offer;
@@ -117,11 +117,13 @@ export const validateReturnRequestStep = createStep(
     if (delivery.kind === "unknown" && dispatch && ["placed", "dispatching", "dispatch_failed", "cancelling"].includes(dispatch.state)) {
       throw new MedusaError(MedusaError.Types.NOT_ALLOWED, NOT_YET, "not_delivered")
     }
-    if (delivery.kind === "delivered" && !withinReturnWindow(delivery.at)) {
-      const ended = returnWindowEnds(delivery.at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })
+    // Returns have a longer window than exchanges, so the kind of request decides which one applies.
+    const windowDays = windowDaysFor(input.type)
+    if (delivery.kind === "delivered" && !withinReturnWindow(delivery.at, new Date(), windowDays)) {
+      const ended = returnWindowEnds(delivery.at, windowDays).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })
       throw new MedusaError(
         MedusaError.Types.NOT_ALLOWED,
-        `Returns and exchanges are open for ${RETURN_WINDOW_DAYS} days after delivery. That window ended on ${ended}.`,
+        `${input.type === "exchange" ? "Exchanges" : "Returns"} are open for ${windowDays} days after delivery. That window ended on ${ended}.`,
         "window_closed"
       )
     }

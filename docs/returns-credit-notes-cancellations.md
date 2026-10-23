@@ -11,8 +11,9 @@ in its own repo's `docs/launch-commerce.md`.
 |---|---|---|---|
 | Not shipped yet (held for the cancel window) | Cancel it, in their account | Everything paid online goes back to the card or bank it came from, nothing kept. Wallet credit used goes back to the wallet. | None. No invoice exists yet. |
 | Shipped, not delivered | Not cancel. The parcel can be refused at the door. | When the parcel is back with us: paid online comes back, less the ₹99 reverse logistics fee. Cash on Delivery: nothing was paid. | Credit note, COD charge kept if delivery was attempted. |
-| Delivered, within 7 days | Return for store credit, or exchange | Return: store credit = what was paid for the item less ₹99 (no fee if damaged or defective), valid 12 months. No cash. Exchange: no fee; only a price difference, if the replacement costs more, by payment link. | Credit note for the item. |
-| Delivered, after 7 days | Nothing | | |
+| Delivered, within 15 days (7 for an exchange) | Return for store credit, or exchange (exchanges only in the first 7 days) | Return: store credit = what was paid for the item less ₹99 (no fee if damaged or defective), valid 12 months. No cash. Exchange: no fee; only a price difference, if the replacement costs more, by payment link. | Credit note for the item. |
+| Delivered, after 7 days | Return only; exchanges are closed | Same as above for a return | Credit note for the item. |
+| Delivered, after 15 days | Nothing | | |
 | Staff cancel in the admin after it shipped | (staff action) | Medusa refunds what was captured | Credit note for everything, COD charge too unless delivery was attempted |
 
 ## Cancelling before it ships
@@ -23,7 +24,7 @@ in its own repo's `docs/launch-commerce.md`.
   no cancellation fee: `ORDER_CANCEL_FEE` is no longer read. A request to be
   refunded to the wallet instead is refused, not quietly changed.
 - Once a shipment exists the order cannot be cancelled by the customer. The
-  message says to refuse delivery, or to return it within 7 days after delivery.
+  message says to refuse delivery, or to return it within 15 days after delivery (or exchange it within 7).
 - A shipment can only exist after the cancel window closes, so no courier booking
   needs cancelling when a customer cancels; there is nothing to void and no invoice
   to reverse. The customer's cancellation never leaves an invoice behind.
@@ -50,7 +51,7 @@ set the route is closed.
 
 1. **Asking.** The customer picks the item, a reason (`SIZE_ISSUE`,
    `DESIGN_PREFERENCE`, `DAMAGED_IN_TRANSIT`, `DEFECTIVE`) and sends it. Allowed
-   only when the order was delivered, within 7 days of delivery. The free tote
+   only when the order was delivered, within 15 days of delivery for a return and 7 days for an exchange. The free tote
    cannot be returned. If delivery cannot be confirmed at all, the request is kept
    for the team (as before) and nothing is booked.
 2. **Pickup.** The courier is booked at once (Shiprocket "create return order",

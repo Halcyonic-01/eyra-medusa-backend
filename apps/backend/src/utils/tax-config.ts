@@ -42,8 +42,11 @@ export function serviceSac(): string {
 /** The flat fee kept when a delivered item is returned, or a shipped parcel is refused. */
 export const REVERSE_LOGISTICS_FEE = 99
 
-/** Days after delivery within which a return or exchange can be requested. */
-export const RETURN_WINDOW_DAYS = 7
+/** Days after delivery within which a return can be requested. */
+export const RETURN_WINDOW_DAYS = 15
+
+/** Days after delivery within which an exchange can be requested. */
+export const EXCHANGE_WINDOW_DAYS = 7
 
 /** Months store credit from a return stays usable. */
 export const STORE_CREDIT_VALIDITY_MONTHS = 12

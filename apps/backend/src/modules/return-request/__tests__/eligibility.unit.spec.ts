@@ -1,4 +1,4 @@
-import { deliveryStateOf, returnWindowEnds, withinReturnWindow } from "../eligibility"
+import { deliveryStateOf, returnWindowEnds, windowDaysFor, withinReturnWindow } from "../eligibility"
 import { paidValueOf, paidValues } from "../pricing"
 
 describe("delivery state", () => {
@@ -28,13 +28,31 @@ describe("delivery state", () => {
   })
 })
 
-describe("the 7-day window", () => {
+describe("the return and exchange windows", () => {
   const delivered = new Date("2026-10-10T08:00:00Z")
 
-  it("runs 7 days from delivery, to the moment", () => {
-    expect(returnWindowEnds(delivered).toISOString()).toBe("2026-10-17T08:00:00.000Z")
-    expect(withinReturnWindow(delivered, new Date("2026-10-17T08:00:00Z"))).toBe(true)
-    expect(withinReturnWindow(delivered, new Date("2026-10-17T08:00:01Z"))).toBe(false)
+  it("gives a return 15 days and an exchange 7", () => {
+    expect(windowDaysFor("return")).toBe(15)
+    expect(windowDaysFor("exchange")).toBe(7)
+  })
+
+  it("runs a return 15 days from delivery, to the moment", () => {
+    expect(returnWindowEnds(delivered).toISOString()).toBe("2026-10-25T08:00:00.000Z")
+    expect(withinReturnWindow(delivered, new Date("2026-10-25T08:00:00Z"))).toBe(true)
+    expect(withinReturnWindow(delivered, new Date("2026-10-25T08:00:01Z"))).toBe(false)
+  })
+
+  it("runs an exchange 7 days from delivery, to the moment", () => {
+    const days = windowDaysFor("exchange")
+    expect(returnWindowEnds(delivered, days).toISOString()).toBe("2026-10-17T08:00:00.000Z")
+    expect(withinReturnWindow(delivered, new Date("2026-10-17T08:00:00Z"), days)).toBe(true)
+    expect(withinReturnWindow(delivered, new Date("2026-10-17T08:00:01Z"), days)).toBe(false)
+  })
+
+  it("keeps a return open on days 8 to 15, when an exchange has closed", () => {
+    const day10 = new Date("2026-10-20T08:00:00Z")
+    expect(withinReturnWindow(delivered, day10, windowDaysFor("return"))).toBe(true)
+    expect(withinReturnWindow(delivered, day10, windowDaysFor("exchange"))).toBe(false)
   })
 
   it("is open on the day of delivery", () => {

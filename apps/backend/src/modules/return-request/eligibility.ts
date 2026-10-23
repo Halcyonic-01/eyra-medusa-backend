@@ -1,8 +1,9 @@
-import { RETURN_WINDOW_DAYS } from "../../utils/tax-config"
+import { EXCHANGE_WINDOW_DAYS, RETURN_WINDOW_DAYS } from "../../utils/tax-config"
 
 /**
- * When a delivered order can still be returned or exchanged: within 7 days of
- * the day it was delivered. Pure, so the rule can be checked on its own.
+ * When a delivered order can still be returned (within 15 days of the day it
+ * was delivered) or exchanged (within 7 days). Pure, so the rule can be checked
+ * on its own.
  */
 
 export type DeliveryState =
@@ -48,6 +49,11 @@ export function deliveryStateOf(dispatch: DispatchFacts, metadata: Record<string
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** How many days after delivery a request of this kind can still be made. */
+export function windowDaysFor(type: "return" | "exchange"): number {
+  return type === "exchange" ? EXCHANGE_WINDOW_DAYS : RETURN_WINDOW_DAYS
+}
 
 export function returnWindowEnds(deliveredAt: Date, days: number = RETURN_WINDOW_DAYS): Date {
   return new Date(deliveredAt.getTime() + days * DAY_MS)

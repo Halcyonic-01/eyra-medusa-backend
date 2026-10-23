@@ -109,7 +109,7 @@ medusaIntegrationTestRunner({
         expect(result.data.cancellation).toMatchObject({ refund_method: "none", refund_amount: 0, refund_status: "not_needed" })
       })
 
-      it("says what to do once the parcel has shipped: refuse delivery, or return within 7 days", async () => {
+      it("says what to do once the parcel has shipped: refuse delivery, or return within 15 days / exchange within 7", async () => {
         const placed = await heldOrder(0)
         const dispatch = getContainer().resolve("orderDispatch") as any
         const [row] = await dispatch.listOrderDispatches({ order_id: placed.orderId }, { take: 1 })
@@ -120,7 +120,8 @@ medusaIntegrationTestRunner({
         expect(shown.code).toBe("shipment_created")
         expect(shown.message).toMatch(/refuse delivery/)
         expect(shown.message).toMatch(/₹99/)
-        expect(shown.message).toMatch(/7 days/)
+        expect(shown.message).toMatch(/return it within 15 days/)
+        expect(shown.message).toMatch(/exchange it within 7 days/)
         expect(((await cancel(placed)) as any).ok).toBe(false)
       })
     })

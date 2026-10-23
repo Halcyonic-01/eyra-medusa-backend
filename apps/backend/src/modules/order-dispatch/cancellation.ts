@@ -1,4 +1,5 @@
 import { roundMoney } from "../wallet/utils"
+import { EXCHANGE_WINDOW_DAYS, RETURN_WINDOW_DAYS } from "../../utils/tax-config"
 
 /**
  * The rules of customer cancellation, kept free of any database or Medusa call
@@ -175,7 +176,7 @@ export const BLOCK_MESSAGES: Record<BlockCode, string> = {
   not_your_order: "This order could not be found.",
   already_cancelled: "This order has already been cancelled.",
   shipment_created:
-    "The shipment has been created, so this order can't be cancelled now. If it has not reached you yet, you can refuse delivery at your door: the parcel comes back to us and your payment is refunded, less the ₹99 reverse logistics fee. Once it is delivered you can return or exchange it within 7 days.",
+    `The shipment has been created, so this order can't be cancelled now. If it has not reached you yet, you can refuse delivery at your door: the parcel comes back to us and your payment is refunded, less the ₹99 reverse logistics fee. Once it is delivered you can return it within ${RETURN_WINDOW_DAYS} days or exchange it within ${EXCHANGE_WINDOW_DAYS} days.`,
   preparing: "Your order is being prepared for shipping, so it can't be cancelled now.",
   not_trackable: "This order can't be cancelled online. Please contact support.",
   payment_not_settled: "Your payment is still being confirmed. Please try again in a few minutes.",

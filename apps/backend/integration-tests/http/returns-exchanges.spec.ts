@@ -173,14 +173,39 @@ medusaIntegrationTestRunner({
           expect(result.message).toMatch(/once it has been delivered/)
         })
 
-        it("refuses once the 7 days after delivery have passed, and accepts the last day", async () => {
-          const late = await delivered({}, 8)
+        it("refuses a return once the 15 days after delivery have passed, and accepts the last day", async () => {
+          const late = await delivered({}, 16)
           const refused: any = await request(returnBody(late, await ringId(late.orderId)))
           expect(refused.ok).toBe(false)
-          expect(refused.message).toMatch(/open for 7 days after delivery/)
+          expect(refused.message).toMatch(/Returns are open for 15 days after delivery/)
+
+          const edge = await delivered({}, 14.9)
+          expect(((await request(returnBody(edge, await ringId(edge.orderId)))) as any).ok).toBe(true)
+        })
+
+        it("refuses an exchange once the 7 days after delivery have passed, and accepts the last day", async () => {
+          const exchange = (placed: { orderId: string; id: string }, itemId: string) => ({
+            customer_id: placed.id, order_id: placed.orderId, type: "exchange", reason: "DESIGN_PREFERENCE",
+            items: [{ item_id: itemId, quantity: 1 }], replacement_variant_id: fx.variantByPrice[1600],
+          })
+          const late = await delivered({}, 8)
+          const refused: any = await request(exchange(late, await ringId(late.orderId)))
+          expect(refused.ok).toBe(false)
+          expect(refused.message).toMatch(/Exchanges are open for 7 days after delivery/)
 
           const edge = await delivered({}, 6.9)
-          expect(((await request(returnBody(edge, await ringId(edge.orderId)))) as any).ok).toBe(true)
+          expect(((await request(exchange(edge, await ringId(edge.orderId)))) as any).ok).toBe(true)
+        })
+
+        it("still takes a return on day 10, when an exchange would be refused", async () => {
+          const placed = await delivered({}, 10)
+          expect(((await request(returnBody(placed, await ringId(placed.orderId)))) as any).ok).toBe(true)
+          const other = await delivered({}, 10)
+          const exchange: any = await request({
+            customer_id: other.id, order_id: other.orderId, type: "exchange", reason: "DESIGN_PREFERENCE",
+            items: [{ item_id: await ringId(other.orderId), quantity: 1 }], replacement_variant_id: fx.variantByPrice[1600],
+          })
+          expect(exchange.ok).toBe(false)
         })
 
         it("takes only the four reasons on offer", async () => {

@@ -22,7 +22,7 @@ export type CreateReturnRequestInput = {
 
 /**
  * Records a customer's request to return or exchange items from a delivered
- * order, after checking it is theirs, inside the 7 days after delivery, and
+ * order, after checking it is theirs, inside the window after delivery (15 days for a return, 7 for an exchange), and
  * valid; then sets it going: a return books the courier, an exchange asks for
  * the handling fee with a payment link. An exchange whose link cannot be made is
  * not kept, so the customer is never left waiting on a link that does not exist.
