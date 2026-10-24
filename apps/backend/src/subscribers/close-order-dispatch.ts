@@ -1,12 +1,14 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { issueCancellationCreditNote } from "../modules/credit-note/after-dispatch"
 import { dispatchEnabled } from "../modules/order-dispatch/config"
 import { postToStorefront } from "../utils/storefront"
 import { closeOrderDispatchWorkflow } from "../workflows/close-order-dispatch"
 
 /**
  * When an order is cancelled, make sure it is never shipped. If a shipment
- * already exists, tell the team so the parcel can be stopped.
+ * already exists, tell the team so the parcel can be stopped, and reverse its
+ * tax invoice with a credit note.
  */
 export default async function closeOrderDispatchHandler({
   event: { data },
@@ -27,6 +29,10 @@ export default async function closeOrderDispatchHandler({
         { type: "cancelled_after_shipment", order_id: data.id, state: result.state },
         logger
       )
+      // The invoice was issued when it shipped, so it is reversed with a credit note.
+      if (result.state === "shipped") {
+        await issueCancellationCreditNote(container, data.id)
+      }
     }
   } catch (error) {
     logger.error(

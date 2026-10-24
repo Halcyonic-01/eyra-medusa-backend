@@ -1,6 +1,11 @@
 import { loadEnv, defineConfig, Modules, ContainerRegistrationKeys } from '@medusajs/framework/utils'
+import { fileModuleEntry, resolveFileStorage } from './src/utils/file-storage'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
+
+// Persistent file storage (product images, invoice PDFs). Null keeps Medusa's
+// default of the server's own disk, which is only right for local development.
+const fileModule = fileModuleEntry(resolveFileStorage(process.env))
 
 module.exports = defineConfig({
   projectConfig: {
@@ -23,6 +28,7 @@ module.exports = defineConfig({
   },
   plugins: ['medusa-plugin-razorpay-v2'],
   modules: [
+    ...(fileModule ? [fileModule] : []),
     {
       resolve: './src/modules/wallet',
     },
@@ -31,6 +37,9 @@ module.exports = defineConfig({
     },
     {
       resolve: './src/modules/order-dispatch',
+    },
+    {
+      resolve: './src/modules/credit-note',
     },
     {
       resolve: '@medusajs/medusa/payment',

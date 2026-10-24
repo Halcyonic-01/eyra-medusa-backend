@@ -183,7 +183,7 @@ export const executeCancellationStep = createStep(
           }
           logger.error(`[cancel] refund failed for ${orderId}: ${refund.error}`)
           throw await abort(
-            "We could not start your refund, so your order has not been cancelled. Please try again, or choose the wallet.",
+            "We could not start your refund, so your order has not been cancelled. Please try again in a few minutes.",
             "refund_failed"
           )
         }

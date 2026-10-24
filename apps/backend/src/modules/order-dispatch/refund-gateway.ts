@@ -128,8 +128,10 @@ async function sendRefund(auth: string, paymentId: string, request: RefundReques
       headers: {
         Authorization: auth,
         "Content-Type": "application/json",
-        // Razorpay returns the first refund again for a repeated key.
-        "X-Refund-Idempotency": request.cancellation_id,
+        // No X-Refund-Idempotency header: Razorpay accepts it only on accounts it has enabled it for,
+        // and rejects the whole request otherwise ("invalid request sent"). A repeat is still safe:
+        // the refund carries this cancellation's receipt and note, and findRefund looks for one
+        // before sending and again after any failure.
       },
       body: JSON.stringify({
         amount: Math.round(request.amount * 100),
@@ -139,11 +141,18 @@ async function sendRefund(auth: string, paymentId: string, request: RefundReques
       }),
       signal: AbortSignal.timeout(20000),
     })
-    const body = (await res.json().catch(() => null)) as { id?: string; error?: { description?: string } } | null
+    const body = (await res.json().catch(() => null)) as {
+      id?: string
+      error?: { description?: string; code?: string; field?: string | null; reason?: string | null; source?: string | null }
+    } | null
     if (res.ok && body?.id) {
       return { kind: "created", id: body.id }
     }
-    const error = body?.error?.description ?? `Razorpay answered ${res.status}`
+    // The description alone ("invalid request sent") does not say what was wrong, so keep the rest.
+    const detail = [body?.error?.code, body?.error?.field && `field ${body.error.field}`, body?.error?.reason, body?.error?.source]
+      .filter(Boolean)
+      .join(", ")
+    const error = `${body?.error?.description ?? `Razorpay answered ${res.status}`}${detail ? ` (${detail})` : ""} [HTTP ${res.status}]`
     // A 4xx is Razorpay saying no; a timeout or 5xx says nothing about the money.
     if (res.status >= 400 && res.status < 500 && res.status !== 408) {
       return { kind: "refused", error }

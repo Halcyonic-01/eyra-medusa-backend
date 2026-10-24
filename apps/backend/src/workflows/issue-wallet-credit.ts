@@ -10,7 +10,7 @@ import {
   releaseLockStep,
   useQueryGraphStep,
 } from "@medusajs/medusa/core-flows"
-import { creditExpiry } from "../modules/wallet/config"
+import { addMonths, creditExpiry } from "../modules/wallet/config"
 import { roundMoney } from "../modules/wallet/utils"
 import { assertCreditTargetStep } from "./steps/assert-credit-target"
 import { createWalletTransactionStep } from "./steps/create-wallet-transaction"
@@ -26,6 +26,14 @@ export type IssueWalletCreditInput = {
   note?: string
   /** Admin user or API key that issued the credit, for the audit trail. */
   created_by?: string
+  /**
+   * An idempotency key, for example "return:retreq_...". Issuing with a key that was
+   * already used gives back the earlier credit and adds nothing, so a retried
+   * return or exchange can never pay twice.
+   */
+  reference?: string
+  /** How long this credit stays usable, in months; 0 means it never expires. Defaults to the wallet's setting. */
+  validity_months?: number
 }
 
 /**
@@ -71,37 +79,46 @@ export const issueWalletCreditWorkflow = createWorkflow(
         amount,
         balance_after: roundMoney(data.wallet.balance + amount),
         remaining: amount,
-        expires_at: creditExpiry(new Date()),
+        expires_at:
+          data.input.validity_months === undefined
+            ? creditExpiry(new Date())
+            : data.input.validity_months === 0
+            ? null
+            : addMonths(new Date(), data.input.validity_months),
         order_id: data.input.order_id ?? null,
+        reference: data.input.reference ?? null,
         note: data.input.note ?? null,
         created_by: data.input.created_by ?? null,
       }
     })
     const transaction = createWalletTransactionStep(transactionInput)
 
-    const balanceInput = transform({ wallet, transaction }, (data) => ({
-      wallet_id: data.wallet.id,
-      balance: data.transaction.balance_after,
-    }))
-    updateWalletBalanceStep(balanceInput)
+    // A repeat run finds the credit already there and must not touch the balance or tell the customer again.
+    when("credit-is-new", transaction, (data) => !data.already_recorded).then(() => {
+      const balanceInput = transform({ wallet, transaction }, (data) => ({
+        wallet_id: data.wallet.id,
+        balance: data.transaction.balance_after,
+      }))
+      updateWalletBalanceStep(balanceInput)
+
+      // Lets other parts of the system react, for example emailing the customer.
+      emitEventStep({
+        eventName: "wallet.credit_added",
+        data: transform({ input, wallet, transaction }, (data) => ({
+          kind: "issued",
+          wallet_id: data.wallet.id,
+          customer_id: data.wallet.customer_id,
+          amount: data.transaction.amount,
+          balance: data.transaction.balance_after,
+          expires_at: data.transaction.expires_at,
+          reason: data.input.reason,
+          order_id: data.input.order_id ?? null,
+          note: data.input.note ?? null,
+        })),
+      })
+    })
 
     releaseLockStep({ key: lockKey })
-
-    // Lets other parts of the system react, for example emailing the customer.
-    emitEventStep({
-      eventName: "wallet.credit_added",
-      data: transform({ input, wallet, transaction }, (data) => ({
-        kind: "issued",
-        wallet_id: data.wallet.id,
-        customer_id: data.wallet.customer_id,
-        amount: data.transaction.amount,
-        balance: data.transaction.balance_after,
-        expires_at: data.transaction.expires_at,
-        reason: data.input.reason,
-        order_id: data.input.order_id ?? null,
-        note: data.input.note ?? null,
-      })),
-    })
 
     const result = transform({ wallet, transaction }, (data) => ({
       wallet_id: data.wallet.id,

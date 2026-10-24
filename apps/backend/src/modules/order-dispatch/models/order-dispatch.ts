@@ -48,6 +48,15 @@ export const OrderDispatch = model
     invoice_seq: model.number().nullable(),
     invoice_number: model.text().nullable(),
     invoice_issued_at: model.dateTime().nullable(),
+    /** What the courier last reported (upper case), and when we heard it. */
+    shiprocket_status: model.text().nullable(),
+    shiprocket_status_at: model.dateTime().nullable(),
+    /** The courier tried to deliver (out for delivery, undelivered or delivered). */
+    delivery_attempted_at: model.dateTime().nullable(),
+    delivered_at: model.dateTime().nullable(),
+    /** The parcel is on its way back to us, or has reached us. */
+    rto_initiated_at: model.dateTime().nullable(),
+    rto_delivered_at: model.dateTime().nullable(),
   })
   .indexes([
     {

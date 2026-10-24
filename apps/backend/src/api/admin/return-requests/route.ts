@@ -1,6 +1,7 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { RETURN_REQUEST_MODULE } from "../../../modules/return-request"
+import { exchangePaymentDue } from "../../../modules/return-request/constants"
 import { fromStoredItems } from "../../../modules/return-request/items"
 import type ReturnRequestModuleService from "../../../modules/return-request/service"
 import { toNumber } from "../../../modules/wallet/utils"
@@ -83,6 +84,29 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
         resolution_note: request.resolution_note,
         resolved_at: request.resolved_at,
         created_at: request.created_at,
+        delivered_at: request.delivered_at,
+        paid_value: request.paid_value === null ? null : toNumber(request.paid_value),
+        fee_amount: request.fee_amount === null ? null : toNumber(request.fee_amount),
+        reverse: {
+          order_ref: request.reverse_order_ref,
+          awb: request.reverse_awb,
+          error: request.reverse_error,
+        },
+        exchange:
+          request.type === "exchange"
+            ? {
+                replacement_title: request.replacement_title,
+                replacement_price: request.replacement_price === null ? null : toNumber(request.replacement_price),
+                price_difference: request.price_difference === null ? null : toNumber(request.price_difference),
+                amount_due: request.amount_due === null ? null : toNumber(request.amount_due),
+                fee_link_url: request.fee_link_url,
+                fee_paid_at: request.fee_paid_at,
+                payment_required: exchangePaymentDue(toNumber(request.amount_due)),
+                replacement_order_id: request.replacement_order_id,
+              }
+            : null,
+        credit_note_id: request.credit_note_id,
+        received_at: request.received_at,
       }
     }),
     count,

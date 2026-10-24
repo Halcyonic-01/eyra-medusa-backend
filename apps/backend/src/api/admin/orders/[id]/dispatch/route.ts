@@ -1,5 +1,6 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { dispatchConfigProblems } from "../../../../../modules/order-dispatch/config"
+import { storefrontShiprocketProblems } from "../../../../../utils/storefront-status"
 import { MedusaError, Modules } from "@medusajs/framework/utils"
 import { ORDER_DISPATCH_MODULE } from "../../../../../modules/order-dispatch"
 import type OrderDispatchModuleService from "../../../../../modules/order-dispatch/service"
@@ -36,7 +37,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   return res.json({
     dispatch: row ? toSnapshot(row as unknown as DispatchRow) : null,
     cancellation,
-    config_problems: dispatchConfigProblems(),
+    config_problems: [...dispatchConfigProblems(), ...(await storefrontShiprocketProblems())],
   })
 }
 

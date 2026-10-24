@@ -1,5 +1,35 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import type { ShipmentDetails } from "../../modules/order-dispatch/transitions"
+import { isToteLine } from "../../utils/commerce-rules"
+
+/**
+ * The order fields the shipment is planned from. Shipping methods and item
+ * quantity details must be loaded, or the order total leaves them out.
+ */
+export const SHIPMENT_ORDER_FIELDS = [
+  "id",
+  "display_id",
+  "email",
+  "status",
+  "canceled_at",
+  "total",
+  "discount_total",
+  "shipping_total",
+  "metadata",
+  "items.title",
+  "items.product_title",
+  "items.variant_title",
+  "items.variant_sku",
+  "items.product_type",
+  "items.unit_price",
+  "items.quantity",
+  "items.detail.quantity",
+  "shipping_methods.name",
+  "shipping_methods.amount",
+  "shipping_address.*",
+  "credit_lines.amount",
+  "payment_collections.payments.provider_id",
+]
 
 export type ShipmentRequest = {
   medusaOrderId: string
@@ -15,9 +45,23 @@ export type ShipmentRequest = {
     phone: string
     email: string
   }
-  items: { name: string; sku: string; type: string; quantity: number; price: number }[]
+  items: {
+    name: string
+    sku: string
+    type: string
+    quantity: number
+    price: number
+    /** Pieces in one unit: 2 for a pair of anklets, otherwise 1. */
+    packSize: number
+    /** The free tote bag: goes on the packing list at a price of zero and is not charged for. */
+    complimentary: boolean
+  }[]
   /** Prepaid: the full order value. COD: what the courier collects. */
   subtotal: number
+  /** Order-level discount, in rupees. Zero when there is none. */
+  discount: number
+  /** What the customer paid for shipping: the Cash on Delivery charge, or zero. */
+  shippingCharge: number
 }
 
 export type ShipmentPlan =
@@ -36,9 +80,12 @@ type OrderRecord = {
   canceled_at?: string | Date | null
   total?: Money
   metadata?: Record<string, unknown> | null
+  discount_total?: Money
+  shipping_total?: Money
   items?: {
     title?: string | null
     product_title?: string | null
+    variant_title?: string | null
     variant_sku?: string | null
     product_type?: string | null
     unit_price?: Money
@@ -61,7 +108,9 @@ type OrderRecord = {
 
 function toNumber(value: Money): number {
   if (value !== null && typeof value === "object") {
-    return Number(value.value)
+    const big = value as { numeric?: unknown; value?: unknown }
+    if (big.numeric !== undefined) return Number(big.numeric)
+    return Number(big.value ?? value)
   }
   return Number(value)
 }
@@ -136,6 +185,8 @@ export function planShipment(order: OrderRecord | undefined): ShipmentPlan {
       type: text(item.product_type) || "ring",
       quantity,
       price: toNumber(item.unit_price),
+      packSize: /\bpair\b/i.test(text(item.variant_title)) ? 2 : 1,
+      complimentary: isToteLine({ variant_sku: text(item.variant_sku) }),
     }
   })
   if (items.length === 0 || items.some((i) => !Number.isFinite(i.quantity) || i.quantity < 1 || !Number.isFinite(i.price))) {
@@ -154,8 +205,12 @@ export function planShipment(order: OrderRecord | undefined): ShipmentPlan {
   )
   const paidOnline = providers.some((id) => id.includes("razorpay"))
 
+  // A replacement sent for an exchange was paid for by the item sent back and the
+  // exchange fee, so the courier collects nothing, whatever the order's own total is.
+  const isReplacement = Boolean(text(metadata.replacement_for_order))
+
   // Paid online, or fully covered by wallet credit, so there is nothing to collect.
-  const paymentMethod: "prepaid" | "cod" = paidOnline || total <= 0 ? "prepaid" : "cod"
+  const paymentMethod: "prepaid" | "cod" = paidOnline || total <= 0 || isReplacement ? "prepaid" : "cod"
 
   return {
     action: "ship",
@@ -175,6 +230,8 @@ export function planShipment(order: OrderRecord | undefined): ShipmentPlan {
       },
       items,
       subtotal: paymentMethod === "cod" ? total : total + credit,
+      discount: toNumber(order.discount_total) || 0,
+      shippingCharge: toNumber(order.shipping_total) || 0,
     },
   }
 }

@@ -43,6 +43,15 @@ class ShiprocketFulfillmentService extends AbstractFulfillmentProviderService {
   static identifier = "shiprocket"
 
   protected options_: ShiprocketOptions
+  /** When the fallback was last explained, so a busy checkout does not flood the log. */
+  protected lastFallbackLog_ = 0
+
+  /** Says why the fixed estimate was used, at most once every ten minutes. */
+  protected explainFallback_(reason: string) {
+    if (Date.now() - this.lastFallbackLog_ < 10 * 60 * 1000) return
+    this.lastFallbackLog_ = Date.now()
+    console.warn(`[shiprocket] using the fixed shipping estimate: ${reason}`)
+  }
 
   constructor(_container: unknown, options: ShiprocketOptions) {
     super()
@@ -81,6 +90,13 @@ class ShiprocketFulfillmentService extends AbstractFulfillmentProviderService {
     const deliveryPincode = context.shipping_address?.postal_code
     const { apiToken, pickupPincode } = this.options_
     if (!deliveryPincode || !apiToken || !pickupPincode) {
+      this.explainFallback_(
+        !apiToken
+          ? "SHIPROCKET_API_TOKEN is not set"
+          : !pickupPincode
+          ? "SHIPROCKET_PICKUP_PINCODE is not set"
+          : "the cart has no delivery pincode yet"
+      )
       return fallback
     }
 
@@ -104,17 +120,26 @@ class ShiprocketFulfillmentService extends AbstractFulfillmentProviderService {
       const res = await fetch(url.toString(), {
         headers: { Authorization: `Bearer ${apiToken}` },
       })
-      if (!res.ok) return fallback
+      if (!res.ok) {
+        this.explainFallback_(
+          res.status === 401 ? "Shiprocket rejected the token (expired or wrong)" : `Shiprocket answered ${res.status}`
+        )
+        return fallback
+      }
 
       const body = (await res.json()) as ShiprocketServiceabilityResponse
       const rates = body.data?.available_courier_companies ?? []
-      if (rates.length === 0) return fallback
+      if (rates.length === 0) {
+        this.explainFallback_("Shiprocket has no courier for that pincode and weight")
+        return fallback
+      }
 
       const cheapest = Math.min(...rates.map((c) => c.rate))
       if (!isFinite(cheapest)) return fallback
 
       return { calculated_amount: Math.round(cheapest), is_calculated_price_tax_inclusive: false }
-    } catch {
+    } catch (error) {
+      this.explainFallback_(`the Shiprocket request failed (${(error as Error).message})`)
       return fallback
     }
   }
