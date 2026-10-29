@@ -8,6 +8,8 @@ export type FakeStorefrontBehaviour = {
   reversePickup: "ok" | "fail"
   /** What /api/whatsapp/send answers. */
   whatsapp: "ok" | "down"
+  /** What /api/wallet/notify answers: sent, or the email provider refused it. */
+  email: "ok" | "down"
 }
 
 export type FakeStorefrontCall = { path: string; body: any; secret: string | undefined }
@@ -20,8 +22,9 @@ export type FakeStorefrontCall = { path: string; body: any; secret: string | und
  */
 export function startFakeStorefront(port: number, secret: string, sharedSecret = "integration-shared-secret") {
   const calls: FakeStorefrontCall[] = []
-  const behaviour: FakeStorefrontBehaviour = { creditNote: "ok", reversePickup: "ok", whatsapp: "ok" }
+  const behaviour: FakeStorefrontBehaviour = { creditNote: "ok", reversePickup: "ok", whatsapp: "ok", email: "ok" }
   let reverseSeq = 0
+  let shipmentSeq = 0
 
   const server = http.createServer((req, res) => {
     const json = (status: number, body: unknown) =>
@@ -70,6 +73,23 @@ export function startFakeStorefront(port: number, secret: string, sharedSecret =
       if (path === "/api/whatsapp/send") {
         if (behaviour.whatsapp === "down") return json(502, { sent: false, error: "provider_down" })
         return json(200, { sent: true })
+      }
+
+      if (path === "/api/wallet/notify") {
+        return json(200, { sent: behaviour.email === "ok" })
+      }
+
+      if (path === "/api/shipping/create-shipment") {
+        shipmentSeq += 1
+        return json(200, {
+          success: true,
+          shipmentId: `SHIP-NEW-${shipmentSeq}`,
+          shiprocketOrderId: `SR-NEW-${shipmentSeq}`,
+          awbCode: `AWBNEW${shipmentSeq}`,
+          courierName: "Delhivery",
+          labelUrl: "https://labels.example/label.pdf",
+          pickupScheduled: true,
+        })
       }
 
       return json(200, { ok: true })

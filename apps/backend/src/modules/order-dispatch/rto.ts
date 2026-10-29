@@ -6,6 +6,7 @@ import { postToStorefront } from "../../utils/storefront"
 import { REVERSE_LOGISTICS_FEE, STORE_CREDIT_VALIDITY_MONTHS } from "../../utils/tax-config"
 import { issueWalletCreditWorkflow } from "../../workflows/issue-wallet-credit"
 import { loadCancellationContext } from "./cancellation-context"
+import { emailRtoRefund } from "./customer-emails"
 import { getRefundGateway } from "./refund-gateway"
 
 /**
@@ -180,8 +181,13 @@ export async function processReturnedParcel(container: MedusaContainer, orderId:
     }
   }
 
-  return finish(
+  const refunded = await finish(
     { status: "refunded", credit_note_number: noteNumber, refund_online: rupees(toOnline * 100), refund_wallet: toWallet, error: null },
     { razorpay_refund_id: refundId }
   )
+  // The customer is told the online part is on its way. The wallet part has its own email.
+  if (refunded.refund_online > 0) {
+    await emailRtoRefund(container, orderId, { amount: refunded.refund_online, credit_note: noteNumber })
+  }
+  return refunded
 }

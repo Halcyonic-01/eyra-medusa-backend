@@ -17,6 +17,7 @@ import {
   type Pg,
 } from "../../modules/order-dispatch/transitions"
 import { postToStorefront } from "../../utils/storefront"
+import { emailOrderShipped } from "../../modules/order-dispatch/customer-emails"
 import type { ShipmentPlan } from "./build-shipment-request"
 import type { ShipmentOutcome } from "./request-shipment"
 
@@ -101,6 +102,8 @@ export const finishDispatchStep = createStep("finish-dispatch", async (input: In
     logger.info(
       `[dispatch] order ${orderId} shipped, invoice ${row.invoice_number}, AWB ${row.awb_code ?? "none"}`
     )
+    // The customer is told once, and a failure here never undoes the shipment.
+    await emailOrderShipped(container, orderId)
     const result: DispatchFinish = { state: "shipped", dispatch: toSnapshot(row), error: null }
     return new StepResponse(result)
   }

@@ -6,6 +6,9 @@ import { ORDER_DISPATCH_MODULE } from "./index"
 import type OrderDispatchModuleService from "./service"
 import { classifyStatus, normaliseStatus, type StatusKind } from "./shiprocket-status"
 
+/** A repeat of a delivery notice is acted on only while it is this recent. */
+const FRESH_NEWS_MS = 3 * 24 * 60 * 60 * 1000
+
 export type ShiprocketUpdate = {
   /** The reference the order is known by at Shiprocket, for example EYRA-21 or EYRA-21-R1. */
   order_ref: string | null
@@ -21,7 +24,7 @@ export type TrackingOutcome = {
   order_id: string | null
   return_request_id: string | null
   /** What the caller should do next, in order. */
-  followups: ("rto_delivered" | "reverse_arrived" | "reverse_failed")[]
+  followups: ("rto_delivered" | "reverse_arrived" | "reverse_failed" | "delivered")[]
 }
 
 /**
@@ -82,7 +85,14 @@ export async function applyShiprocketUpdate(
     if ((kind === "attempted" || kind === "delivered" || kind === "rto") && !dispatch.delivery_attempted_at) {
       patch.delivery_attempted_at = update.at
     }
-    if (kind === "delivered" && !dispatch.delivered_at) patch.delivered_at = update.at
+    if (kind === "delivered") {
+      // The customer email is sent once however often this runs, so a repeat of
+      // fresh news lets one that failed go out. Old news is never acted on.
+      if (!dispatch.delivered_at || Date.now() - update.at.getTime() < FRESH_NEWS_MS) {
+        followups.push("delivered")
+      }
+      if (!dispatch.delivered_at) patch.delivered_at = update.at
+    }
     if ((kind === "rto" || kind === "rto_delivered") && !dispatch.rto_initiated_at) patch.rto_initiated_at = update.at
     if (kind === "rto_delivered" && !dispatch.rto_delivered_at) {
       patch.rto_delivered_at = update.at

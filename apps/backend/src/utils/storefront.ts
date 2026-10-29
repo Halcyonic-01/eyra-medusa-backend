@@ -43,6 +43,43 @@ export async function postToStorefront(
   }
 }
 
+/**
+ * For the routes that send a customer email. The storefront answers 200
+ * {"sent": false} when the email provider refused it or the email mode held
+ * it back, and that is "failed" here, so the caller does not record an email
+ * as sent when it was not.
+ */
+export async function sendStorefrontEmail(
+  path: string,
+  payload: Record<string, unknown>,
+  log: { info: (message: string) => void; error: (message: string) => void }
+): Promise<StorefrontResult> {
+  const revalidateUrl = process.env.STOREFRONT_REVALIDATE_URL
+  const secret = process.env.STOREFRONT_REVALIDATE_SECRET
+  if (!revalidateUrl || !secret) {
+    log.info(`[storefront] STOREFRONT_REVALIDATE_URL or _SECRET not set, skipping ${path}`)
+    return "skipped"
+  }
+
+  try {
+    const res = await fetch(new URL(path, revalidateUrl).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-revalidate-secret": secret },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) {
+      log.error(`[storefront] ${path} answered ${res.status}`)
+      return "failed"
+    }
+    const reply = (await res.json().catch(() => null)) as { sent?: boolean } | null
+    return reply?.sent === true ? "sent" : "failed"
+  } catch (error) {
+    log.error(`[storefront] could not reach ${path}: ${(error as Error).message}`)
+    return "failed"
+  }
+}
+
 export type StorefrontReply =
   | { kind: "skipped"; message: string }
   | { kind: "unreachable"; message: string }
