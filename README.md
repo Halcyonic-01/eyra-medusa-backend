@@ -152,6 +152,10 @@ The storefront is configured via environment variables in `apps/storefront/.env.
 | `NEXT_PUBLIC_BASE_URL` | Base URL of the storefront | `https://localhost:8000` |
 | `NEXT_PUBLIC_STRIPE_KEY` | Stripe publishable key (optional) | — |
 
+### Customer emails
+
+Order updates, refund notices and offer emails are sent through Resend by the storefront; this backend decides when and makes sure each goes out once. See [docs/customer-emails.md](docs/customer-emails.md).
+
 ## Resources
 
 - [Medusa Documentation](https://docs.medusajs.com)

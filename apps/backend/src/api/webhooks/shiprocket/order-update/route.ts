@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { emailOrderDelivered } from "../../../../modules/order-dispatch/customer-emails"
 import { processReturnedParcel } from "../../../../modules/order-dispatch/rto"
 import { applyShiprocketUpdate } from "../../../../modules/order-dispatch/tracking"
 import { postToStorefront } from "../../../../utils/storefront"
@@ -21,7 +22,8 @@ const text = (value: unknown): string | null => (typeof value === "string" && va
  * closed rather than open. The storefront's own tracking route forwards the
  * same updates here, so either can be the address Shiprocket calls.
  *
- *  - A delivered forward parcel starts the 7-day return window.
+ *  - A delivered forward parcel starts the return window, and the customer is
+ *    told it arrived (once).
  *  - A parcel returned to us after a failed or refused delivery gets a credit
  *    note and its refund.
  *  - A reverse pickup we booked that reaches our warehouse is queued for the
@@ -60,7 +62,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const outcome = await applyShiprocketUpdate(req.scope, { order_ref: orderRef, awb, status, at })
 
     for (const step of outcome.followups) {
-      if (step === "rto_delivered" && outcome.order_id) {
+      if (step === "delivered" && outcome.order_id) {
+        await emailOrderDelivered(req.scope, outcome.order_id)
+      } else if (step === "rto_delivered" && outcome.order_id) {
         await processReturnedParcel(req.scope, outcome.order_id)
       } else if (step === "reverse_arrived") {
         await postToStorefront(
