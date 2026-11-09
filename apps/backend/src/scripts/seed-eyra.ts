@@ -195,7 +195,9 @@ export default async function seedEyra({ container }: { container: MedusaContain
     entity: "shipping_profile",
     fields: ["id"],
   });
-  let shippingProfile = shippingProfileResult[0];
+  // Typed by what is used below (its id), since the query result and the
+  // workflow result are different shapes of the same shipping profile.
+  let shippingProfile: { id: string } | undefined = shippingProfileResult[0];
   if (!shippingProfile) {
     const { result } = await createShippingProfilesWorkflow(container).run({
       input: { data: [{ name: "Default", type: "default" }] },

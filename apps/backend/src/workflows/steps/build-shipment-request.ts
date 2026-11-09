@@ -1,6 +1,7 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import type { ShipmentDetails } from "../../modules/order-dispatch/transitions"
 import { isToteLine } from "../../utils/commerce-rules"
+import { shipmentItemType } from "../../utils/product-type"
 
 /**
  * The order fields the shipment is planned from. Shipping methods and item
@@ -182,7 +183,7 @@ export function planShipment(order: OrderRecord | undefined): ShipmentPlan {
     return {
       name: text(item.product_title) || text(item.title) || "Jewellery",
       sku: text(item.variant_sku) || text(item.title) || "EYRA-ITEM",
-      type: text(item.product_type) || "ring",
+      type: shipmentItemType(item.product_type),
       quantity,
       price: toNumber(item.unit_price),
       packSize: /\bpair\b/i.test(text(item.variant_title)) ? 2 : 1,
