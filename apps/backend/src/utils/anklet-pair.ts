@@ -3,7 +3,8 @@ import { shipmentItemType } from "./product-type"
 /**
  * Every anklet is sold as a Single or a Pair. The admin only sets the Single
  * price; the Pair is its own variant, kept by the backend at two singles less a
- * fixed amount, and it draws two units from the Single's stock.
+ * fixed amount, and it draws two units from the Single's stock. Quantity counts
+ * units of the chosen option: two Pairs are four anklets at two pair prices.
  */
 export const PACK_OPTION = "Pack"
 export const SINGLE = "Single"
@@ -33,6 +34,8 @@ export type PairVariant = {
   options: Record<string, string>
   /** The plain INR price (no price list, no rules), if there is one. */
   inr: { id: string; amount: number } | null
+  /** INR prices in price lists (sales), without rules of their own. */
+  listPrices: { id: string; price_list_id: string; amount: number }[]
   inventory: { inventory_item_id: string; required_quantity: number }[]
 }
 
@@ -63,6 +66,20 @@ export type PairPlan =
         inventory_items?: { inventory_item_id: string; required_quantity: number }[]
       } | null
       reprice: { variant_id: string; price_id: string | null; amount: number } | null
+      /** Give the Pair a price in every price list the Single is in (a sale), at two sale singles less the discount. */
+      listPrices: {
+        price_list_id: string
+        create: { variant_id: string; amount: number; currency_code: string }[]
+        update: { id: string; variant_id: string; amount: number; currency_code: string }[]
+        delete: string[]
+      }[]
+      /** Make the Pair draw two of each of the Single's stock items, and nothing else. */
+      relink: {
+        variant_id: string
+        create: { inventory_item_id: string; required_quantity: number }[]
+        update: { inventory_item_id: string; required_quantity: number }[]
+        delete: string[]
+      } | null
     }
 
 function pairVariantInput(product: PairProduct, single: PairVariant, kept: Record<string, string>, amount: number) {
@@ -82,6 +99,52 @@ function pairVariantInput(product: PairProduct, single: PairVariant, kept: Recor
         }
       : {}),
   }
+}
+
+/**
+ * The Pair's sale prices: in each price list holding a price for the Single,
+ * the Pair costs two of those singles less the discount, so a sale and the pair
+ * discount add up and both end together. Pair prices in lists the Single has
+ * left are removed. A new Pair gets its sale prices on the next sync.
+ */
+function planListPrices(single: PairVariant, pair: PairVariant): Extract<PairPlan, { kind: "apply" }>["listPrices"] {
+  const lists = new Set([...single.listPrices, ...pair.listPrices].map((price) => price.price_list_id))
+  const changes: Extract<PairPlan, { kind: "apply" }>["listPrices"] = []
+  for (const listId of lists) {
+    const sale = single.listPrices.find((price) => price.price_list_id === listId)
+    const current = pair.listPrices.filter((price) => price.price_list_id === listId)
+    const change = { price_list_id: listId, create: [], update: [], delete: [] } as (typeof changes)[number]
+    if (!sale) {
+      change.delete = current.map((price) => price.id)
+    } else {
+      const amount = pairPrice(sale.amount)
+      const [keep, ...extra] = current
+      if (!keep) change.create = [{ variant_id: pair.id, amount, currency_code: "inr" }]
+      else if (keep.amount !== amount) change.update = [{ id: keep.id, variant_id: pair.id, amount, currency_code: "inr" }]
+      change.delete = extra.map((price) => price.id)
+    }
+    if (change.create.length || change.update.length || change.delete.length) changes.push(change)
+  }
+  return changes
+}
+
+/**
+ * The stock links that make a Pair take two of each of the Single's items, or
+ * null when it already does. A Pair set up with its own stock item is moved
+ * onto the Single's; the old item is only unlinked, never deleted.
+ */
+function planRelink(single: PairVariant, pair: PairVariant): Extract<PairPlan, { kind: "apply" }>["relink"] {
+  if (!single.manage_inventory || !pair.manage_inventory || !single.inventory.length) return null
+  const wanted = new Map(single.inventory.map((item) => [item.inventory_item_id, item.required_quantity * 2]))
+  const have = new Map(pair.inventory.map((item) => [item.inventory_item_id, item.required_quantity]))
+
+  const create = [...wanted].filter(([id]) => !have.has(id))
+  const update = [...wanted].filter(([id, quantity]) => have.has(id) && have.get(id) !== quantity)
+  const remove = [...have.keys()].filter((id) => !wanted.has(id))
+  if (!create.length && !update.length && !remove.length) return null
+
+  const link = ([inventory_item_id, required_quantity]: [string, number]) => ({ inventory_item_id, required_quantity })
+  return { variant_id: pair.id, create: create.map(link), update: update.map(link), delete: remove }
 }
 
 /** What has to change so an anklet has a Single and a correctly priced Pair. Pure, so it is tested alone. */
@@ -105,15 +168,20 @@ export function planPairSync(product: PairProduct): PairPlan {
     const pair = product.variants.find((variant) => variant.options[PACK_OPTION] === PAIR)
     if (!pair) {
       const kept = Object.fromEntries(Object.entries(single.options).filter(([title]) => title !== PACK_OPTION))
-      return { kind: "apply", restructure: null, createPair: pairVariantInput(product, single, kept, amount), reprice: null }
+      return {
+        kind: "apply",
+        restructure: null,
+        createPair: pairVariantInput(product, single, kept, amount),
+        reprice: null,
+        listPrices: [],
+        relink: null,
+      }
     }
-    if (pair.inr?.amount === amount) return { kind: "in_sync" }
-    return {
-      kind: "apply",
-      restructure: null,
-      createPair: null,
-      reprice: { variant_id: pair.id, price_id: pair.inr?.id ?? null, amount },
-    }
+    const reprice = pair.inr?.amount === amount ? null : { variant_id: pair.id, price_id: pair.inr?.id ?? null, amount }
+    const listPrices = planListPrices(single, pair)
+    const relink = planRelink(single, pair)
+    if (!reprice && !listPrices.length && !relink) return { kind: "in_sync" }
+    return { kind: "apply", restructure: null, createPair: null, reprice, listPrices, relink }
   }
 
   // No Pack option yet: only a one-variant anklet can be turned into Single and Pair.
@@ -147,5 +215,7 @@ export function planPairSync(product: PairProduct): PairPlan {
     },
     createPair: pairVariantInput(product, single, kept, pairPrice(single.inr.amount)),
     reprice: null,
+    listPrices: [],
+    relink: null,
   }
 }

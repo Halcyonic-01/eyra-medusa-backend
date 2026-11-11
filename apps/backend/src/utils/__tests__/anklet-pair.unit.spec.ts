@@ -7,6 +7,7 @@ const variant = (over: Partial<PairVariant> = {}): PairVariant => ({
   manage_inventory: true,
   options: { "Default option": "Default option value" },
   inr: { id: "price_single", amount: 1500 },
+  listPrices: [],
   inventory: [{ inventory_item_id: "iitem_1", required_quantity: 1 }],
   ...over,
 })
@@ -85,6 +86,8 @@ describe("planPairSync", () => {
         inventory_items: [{ inventory_item_id: "iitem_1", required_quantity: 2 }],
       },
       reprice: null,
+      listPrices: [],
+      relink: null,
     })
   })
 
@@ -123,7 +126,82 @@ describe("planPairSync", () => {
       restructure: null,
       createPair: null,
       reprice: { variant_id: "variant_pair", price_id: "price_pair", amount: 2800 },
+      listPrices: [],
+      relink: null,
     })
+  })
+
+  it("moves a Pair with its own stock onto two of the Single's, unlinking the old item", () => {
+    const product = packed(2800)
+    product.variants[1].inventory = [{ inventory_item_id: "iitem_pair", required_quantity: 1 }]
+    expect(planPairSync(product)).toEqual({
+      kind: "apply",
+      restructure: null,
+      createPair: null,
+      reprice: null,
+      listPrices: [],
+      relink: {
+        variant_id: "variant_pair",
+        create: [{ inventory_item_id: "iitem_1", required_quantity: 2 }],
+        update: [],
+        delete: ["iitem_pair"],
+      },
+    })
+  })
+
+  it("makes a Pair that takes one of the Single's stock take two", () => {
+    const product = packed(2800)
+    product.variants[1].inventory = [{ inventory_item_id: "iitem_1", required_quantity: 1 }]
+    const plan = planPairSync(product)
+    expect(plan.kind === "apply" && plan.relink).toEqual({
+      variant_id: "variant_pair",
+      create: [],
+      update: [{ inventory_item_id: "iitem_1", required_quantity: 2 }],
+      delete: [],
+    })
+  })
+
+  it("gives the Pair a sale price in the same price list as the Single: two sale singles less 200", () => {
+    const product = packed(2800)
+    product.variants[0].listPrices = [{ id: "plp_single", price_list_id: "plist_sale", amount: 1200 }]
+    const plan = planPairSync(product)
+    expect(plan.kind === "apply" && plan.listPrices).toEqual([
+      {
+        price_list_id: "plist_sale",
+        create: [{ variant_id: "variant_pair", amount: 2200, currency_code: "inr" }],
+        update: [],
+        delete: [],
+      },
+    ])
+  })
+
+  it("follows a changed sale price and drops the Pair's sale price when the Single leaves the sale", () => {
+    const changed = packed(2800)
+    changed.variants[0].listPrices = [{ id: "plp_single", price_list_id: "plist_sale", amount: 1300 }]
+    changed.variants[1].listPrices = [{ id: "plp_pair", price_list_id: "plist_sale", amount: 2200 }]
+    const plan = planPairSync(changed)
+    expect(plan.kind === "apply" && plan.listPrices[0].update).toEqual([
+      { id: "plp_pair", variant_id: "variant_pair", amount: 2400, currency_code: "inr" },
+    ])
+
+    const ended = packed(2800)
+    ended.variants[1].listPrices = [{ id: "plp_pair", price_list_id: "plist_sale", amount: 2200 }]
+    const endPlan = planPairSync(ended)
+    expect(endPlan.kind === "apply" && endPlan.listPrices[0].delete).toEqual(["plp_pair"])
+  })
+
+  it("is in sync when the Pair's sale price already matches", () => {
+    const product = packed(2800)
+    product.variants[0].listPrices = [{ id: "plp_single", price_list_id: "plist_sale", amount: 1200 }]
+    product.variants[1].listPrices = [{ id: "plp_pair", price_list_id: "plist_sale", amount: 2200 }]
+    expect(planPairSync(product)).toEqual({ kind: "in_sync" })
+  })
+
+  it("leaves stock links alone when the Pair is not stock-managed", () => {
+    const product = packed(2800)
+    product.variants[1].manage_inventory = false
+    product.variants[1].inventory = []
+    expect(planPairSync(product)).toEqual({ kind: "in_sync" })
   })
 
   it("does nothing when the Pair price is already right", () => {

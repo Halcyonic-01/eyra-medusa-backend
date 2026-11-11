@@ -11,8 +11,9 @@ migrations.
 
 Prepaid orders ship free and Cash on Delivery adds a flat charge, both set by
 the backend. Three discount codes work through Medusa promotions. Anklets can be
-sold as Single or Pair and pendants with or without a chain, as ordinary Medusa
-variants priced in Medusa, each with its own stock. Product prices include 3%
+sold as Single or Pair (a Pair is two of the same design at ₹200 less, drawing
+two of the Single's stock) and pendants with or without a chain, as ordinary
+Medusa variants priced in Medusa. Product prices include 3%
 GST, and the invoice takes the GST out of the discounted price (the discount is
 spread over the lines first). The Cash on Delivery charge carries 18% GST under
 SAC 9997. Product images and invoice PDFs live in S3. Each shipped order gets a
@@ -89,10 +90,23 @@ A product with several choices is just a Medusa product with an option and a
 variant for each value. Medusa's variant price is the only price used.
 
 **Anklet (single and pair)**
-- Option `Pack` with values `Single` and `Pair`.
-- Variant `Single`: the price `x`. Variant `Pair`: `1.9 × x`, rounded to the
-  rupee (₹2,000 gives ₹3,800, ₹1,500 gives ₹2,850).
-- Product type `anklet`. Give each variant its own stock.
+- Product type `anklet`. Create it with one variant at the single price `x` and
+  stock it; nothing else is needed.
+- The backend turns it into option `Pack` with `Single` (price `x`) and `Pair`
+  (price `2x - 200`: ₹2,000 gives ₹3,800). The Pair has no stock of its own: it
+  takes two of the Single's. Quantity counts the chosen option, so 3 Pairs are 6
+  anklets at 3 × ₹3,800.
+- Only edit the Single's price: the `sync-anklet-pair` subscriber and the
+  `sync-anklet-pairs` job (every minute) set the Pair price, add a missing
+  Pair, and move a Pair with its own stock onto the Single's.
+- Sales: put the Single in a price list. The job gives the Pair a price in the
+  same list at two sale singles less ₹200 (Single ₹1,200 on sale gives a ₹2,200
+  Pair), so both start and end together. Price lists raise no event, so this
+  happens within a minute of saving the sale.
+  `npx medusa exec ./src/scripts/sync-anklet-pairs.ts` does it at once.
+- Medusa checks stock one cart line at a time, so the cart hooks in
+  `src/workflows/hooks/cart-shared-stock.ts` (and the order check) add up a
+  Single line and a Pair line that share stock.
 - The parcel weight counts a pair twice (variant title containing "Pair").
 
 **Pendant (optional silver chain)**
