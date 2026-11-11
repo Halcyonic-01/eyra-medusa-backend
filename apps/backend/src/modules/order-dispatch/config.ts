@@ -1,5 +1,7 @@
 import { fileStorageProblems } from "../../utils/file-storage"
 import { jwtExpiry } from "../../utils/jwt-expiry"
+import { redisProblems } from "../../utils/redis-modules"
+
 /**
  * Settings for holding an order before its shipment is created. They are read
  * each time, so they can change without a code change.
@@ -42,6 +44,7 @@ export function dispatchConfigProblems(): string[] {
     problems.push("STOREFRONT_SHIPMENT_SECRET is not set, so shipments are created with the shared secret instead of their own")
   }
   problems.push(...fileStorageProblems(process.env))
+  problems.push(...redisProblems(process.env))
 
   // The backend's own Shiprocket token only prices live courier rates, which
   // customers are not charged (prepaid ships free, Cash on Delivery has its own

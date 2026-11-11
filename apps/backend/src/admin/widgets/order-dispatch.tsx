@@ -34,7 +34,16 @@ type Cancellation = {
   razorpay_refund_id: string | null
 }
 
-type DispatchResponse = { dispatch: Dispatch | null; cancellation: Cancellation | null; config_problems?: string[] }
+type Standing = { ok: boolean; kind?: string; reason?: string; message?: string }
+type Override = { id: string; actor_id: string; reason: string; created_at: string }
+type DispatchResponse = {
+  dispatch: Dispatch | null
+  cancellation: Cancellation | null
+  config_problems?: string[]
+  payment_standing?: Standing
+  override?: Override | null
+  can_override?: boolean
+}
 
 const REFUND_LABELS: Record<Cancellation["refund_status"], { label: string; color: "green" | "orange" | "red" | "grey" }> = {
   not_needed: { label: "Nothing to refund", color: "grey" },
@@ -150,6 +159,32 @@ const OrderDispatchWidget = ({ data: order }: DetailWidgetProps<AdminOrder>) => 
     onError: (err: Error) => toast.error(err.message || "Could not release the order"),
   })
 
+  const allowDispatch = useMutation({
+    mutationFn: (reason: string) =>
+      sdk.client.fetch(`/admin/orders/${order.id}/dispatch-override`, { method: "POST", body: { reason } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey })
+      toast.success("This order may now be shipped")
+    },
+    onError: (err: Error) => toast.error(err.message || "Could not allow dispatch"),
+  })
+
+  const withdrawDispatch = useMutation({
+    mutationFn: () => sdk.client.fetch(`/admin/orders/${order.id}/dispatch-override`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey })
+      toast.success("Dispatch permission withdrawn")
+    },
+    onError: (err: Error) => toast.error(err.message || "Could not withdraw it"),
+  })
+
+  const askAllowDispatch = () => {
+    const reason = window.prompt(
+      "This order has no checkout behind it (it was made in the admin). Its payment must already be recorded. Why should it ship? (kept on record)"
+    )
+    if (reason && reason.trim()) allowDispatch.mutate(reason.trim())
+  }
+
   const confirmRelease = async () => {
     const confirmed = await prompt({
       title: "Release this order?",
@@ -198,6 +233,34 @@ const OrderDispatchWidget = ({ data: order }: DetailWidgetProps<AdminOrder>) => 
           Setup problem: {problem}.
         </Text>
       ))}
+
+      {data?.payment_standing && !data.payment_standing.ok && !cancelledOrder && (
+        <div className="px-6 py-3">
+          <Text size="small" className="text-ui-fg-error">
+            Not shipped: {data.payment_standing.message}
+          </Text>
+          {data.can_override && (
+            <div className="flex justify-end pt-2">
+              <Button size="small" variant="secondary" onClick={askAllowDispatch} isLoading={allowDispatch.isPending}>
+                Allow dispatch
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {data?.override && (
+        <div className="px-6 py-3">
+          <Text size="small" className="text-ui-fg-subtle">
+            Dispatch allowed by staff ({data.override.actor_id}, {formatTime(data.override.created_at)}): {data.override.reason}
+          </Text>
+          <div className="flex justify-end pt-2">
+            <Button size="small" variant="transparent" onClick={() => withdrawDispatch.mutate()} isLoading={withdrawDispatch.isPending}>
+              Withdraw
+            </Button>
+          </div>
+        </div>
+      )}
 
       {isLoading && (
         <Text size="small" className="px-6 py-4 text-ui-fg-subtle">

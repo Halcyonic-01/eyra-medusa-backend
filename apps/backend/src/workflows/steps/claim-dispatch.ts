@@ -2,8 +2,10 @@ import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { ORDER_DISPATCH_MODULE } from "../../modules/order-dispatch"
 import type OrderDispatchModuleService from "../../modules/order-dispatch/service"
+import { loadPaymentStanding, STANDING_MESSAGES } from "../../modules/order-dispatch/payment-standing"
 import {
   claimDispatch,
+  deferDispatchForPayment,
   markDispatchFailed,
   toSnapshot,
   type DispatchRow,
@@ -33,15 +35,35 @@ const REASONS: Record<string, string> = {
   cancelled: "cancelled",
 }
 
+/** How long an order with no confirmed payment waits before it is looked at again. */
+const PAYMENT_RECHECK_MINUTES = 10
+
 /**
  * Takes the order for dispatching, atomically: only one caller can hold it, and
  * only once its cancel window has closed (unless forced). If the workflow fails
  * afterwards, the order is handed back for a retry instead of being left stuck.
+ * An order with no linked checkout or no recorded payment is never taken, not
+ * even with "Ship now": it is held back and looked at again later.
  */
 export const claimDispatchStep = createStep(
   "claim-dispatch",
   async (input: Input, { container }) => {
     const pg = container.resolve(ContainerRegistrationKeys.PG_CONNECTION) as unknown as Pg
+
+    const standing = await loadPaymentStanding(container, input.order_id)
+    if (!standing.ok) {
+      const message = `Not shipped: ${STANDING_MESSAGES[standing.reason]}`
+      const held = await deferDispatchForPayment(pg, input.order_id, message, PAYMENT_RECHECK_MINUTES)
+      container
+        .resolve(ContainerRegistrationKeys.LOGGER)
+        .warn(`[dispatch] order ${input.order_id} held back: ${standing.reason}`)
+      const result: DispatchClaim = {
+        claimed: false,
+        reason: "payment_not_confirmed",
+        dispatch: held ? toSnapshot(held) : null,
+      }
+      return new StepResponse(result, "")
+    }
 
     const row = await claimDispatch(pg, input.order_id, input.force === true)
     if (row) {
