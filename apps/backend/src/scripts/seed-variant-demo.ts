@@ -5,13 +5,14 @@ import {
   createProductTypesWorkflow,
   createProductsWorkflow,
 } from "@medusajs/medusa/core-flows"
+import { pairPrice } from "../utils/anklet-pair"
 
 /**
  * Two example products that use the new variant choices, for trying the
  * storefront locally. Not for production: in production, create the real anklets
  * and pendants in the Medusa admin the same way (see docs/launch-commerce.md).
  *
- *   - Luna Anklet: Pack = Single or Pair. The pair is 1.9 x the single.
+ *   - Luna Anklet: Pack = Single or Pair. The pair is two singles less Rs 200.
  *   - Moonstone Pendant: Chain = Pendant only, or With silver chain (+Rs 1,000).
  *
  * Safe to run twice; it skips products that exist. Run with:
@@ -21,8 +22,6 @@ import {
 
 const IMG = "https://www.eyra.org.in/images"
 
-/** The pair price rule: 1.9 x the single, rounded to the rupee. */
-export const pairPrice = (single: number) => Math.round(single * 1.9)
 
 /** What a silver chain adds to a pendant. */
 const CHAIN_ADD_ON = 1000
