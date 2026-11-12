@@ -62,10 +62,190 @@ an order, for every caller, including anyone calling Medusa directly:
   may have none: the tote is subject to stock.
 
 Medusa allows only one handler per hook, so the wallet check lives there too.
+A repeat completion of a cart that is already an order (webhook retry, duplicate
+event, verify and webhook racing) skips every check and returns the existing
+order: refusing there would make Medusa refund a placed order.
+
+### Prices at checkout (sales ending, price changes)
+
+A cart line keeps the price it got when it was added, so checkout makes it current:
+
+- `POST /store/carts/:id/payment-mode` (the storefront's checkout pricing) reprices
+  any line whose price no longer matches today's price, then rechecks the tote.
+- `POST /store/carts/:id/razorpay-session` (called by the storefront's
+  create-order) reprices too, opens the Razorpay payment, and records a
+  `payment_price_snapshot`: every line, the amount and the Razorpay order.
+- At completion every line must be at today's price. The one exception is a
+  Razorpay payment that matches its snapshot (same session, Razorpay order,
+  lines and amount) and that Razorpay itself confirms was paid in full. That
+  order is placed at the price paid, even if a sale ended during payment, and
+  checkout pricing does not reprice a cart in that state.
+- A failed, cancelled or short payment, a changed cart, Cash on Delivery and
+  wallet-only orders get no exception: the customer sees "Prices in your cart
+  have changed" and pays today's price on the next try.
+- If Razorpay cannot be reached, completion answers 500 so verify or the
+  webhook retries, and a cart that is already paid cannot open a second payment.
+
+### Razorpay webhooks and crash recovery
+
+Three paths can turn a paid cart into an order, and any mix of them is safe:
+the browser's `/api/razorpay/verify`, the storefront webhook
+`/api/razorpay/webhook`, and Medusa's own `/hooks/payment/razorpay_razorpay`.
+
+- **Medusa's own webhook is guarded** (`src/api/hooks/middlewares.ts`). The
+  plugin looks for the session in `payment.notes.session_id`, which checkout
+  never sets; without the guard Medusa ran with no session and, in tests,
+  captured another order's payment and completed an abandoned COD cart. The
+  guard checks the signature, finds the session from `payment_price_snapshot`
+  by Razorpay order id (it must still exist and match), writes it into the
+  event and passes it on. No match: answered 200 and dropped (the storefront
+  webhook still completes known carts). Bad signature: 400. Any other provider
+  under `/hooks/payment/*`: 404.
+- **Storefront webhook claims are temporary** (5 minutes) until the order is
+  confirmed, then kept 30 days. A delivery that dies part-way no longer blocks
+  Razorpay's redeliveries; one arriving while another is processing gets 409.
+- **Razorpay ids and the confirmation email** are recorded through
+  `POST /admin/razorpay-confirmations` (checks the Razorpay order is this cart's
+  and Razorpay lists the payment as paid; merges into metadata; repeatable) and
+  `POST /admin/orders/:id/confirmation-email` (one atomic claim, then sent or
+  release). Both run from verify and the webhook, also for an already completed
+  cart. A failed email is logged, not retried through the webhook: a webhook
+  that keeps failing is switched off by Razorpay.
+- **Never shipped without a checkout and a payment**: the dispatch claim checks
+  the order is linked to its cart (or is a replacement its exchange names) and
+  has a payment covering the amount due (wallet-only orders owe nothing). If
+  not, it is held for 10 minutes, the reason shown in the Shipping panel, and
+  checked again; "Ship now" does not override it. Orders made in Medusa admin
+  without a cart are held too.
+- **`reconcile-order-payments` job** (every 5 minutes, orders 5 minutes to 3
+  days old): an order a crash left without a payment record gets it once
+  proven (Razorpay confirms the session's order was paid in full, or it is COD),
+  then `order.placed` is sent again so dispatch tracking and wallet redemption
+  catch up (both ignore repeats). Unprovable ones and orders linked to no
+  checkout are reported to the team (`order_payment_unconfirmed`,
+  `order_orphaned`) and stay held. Nothing here refunds or cancels.
+- **`recover-order-integrity` job** (every 10 minutes), four independent sweeps:
+  - *Leftover orders.* Checkout writes the cart's own id into the cart's
+    metadata (`eyra_checkout_cart_id`); Medusa copies it onto the order. An
+    order that carries it, is linked to no cart, has no payment, no wallet
+    deduction, no fulfilment, no shipment and is over 15 minutes old is voided:
+    under the same lock Medusa's completion takes for that cart, its stock
+    reservations are released, its dispatch record closed, and it is marked
+    cancelled with the reason in its metadata. Medusa's `order.canceled` event
+    is not sent, so no refund, wallet or credit-note handler runs. Orders made
+    in Medusa admin never carry the marker and are never voided.
+  - *Discount codes on leftovers.* Medusa counts a code's use in the step a
+    crash can interrupt, so a leftover may have used up a once-per-customer
+    code, and the customer's retry would then fail ("Promotion usage exceeds
+    the budget limit") or Medusa would silently drop the code from the cart.
+    When a leftover is voided, a use is given back only if Medusa's counter is
+    higher than the uses of all real orders of that code (counter read first,
+    so a concurrent checkout can only make it decline); otherwise nothing is
+    given back, so no extra use is ever handed out. The given-back codes are
+    recorded on the leftover (`orphan_codes_given_back`). Leftovers of a cart
+    are cleared at once, without the 15 minute wait, before any change to that
+    cart (`/store/carts/:id` and everything under it) and in the completion
+    check itself, both under the cart's completion lock, so a retry right after
+    the crash keeps its code.
+  - *Stock reservations.* Checkout orders 5 minutes to 3 days old that are not
+    cancelled, fulfilled or with the courier get any reservation they are
+    missing: quantity times the inventory item's required quantity (a Pair
+    anklet reserves two of the Single's stock), sales-channel locations first,
+    never more than is free. What is missing and what is free are read again,
+    and each reservation made, under the same per-inventory-item locks Medusa's
+    own checkout reserves with, and the inventory module refuses an overdraw,
+    so a repair and a live checkout (or two repairs) cannot both take the last
+    unit. If no stock is free the team is told once (`stock_not_reserved`).
+  - *Wallet deductions.* Checkout orders that used wallet credit with no
+    `redeem:<order>` transaction (the `order.placed` event was lost) are
+    redeemed. The redemption is locked per customer and the reference is
+    unique, so it can never deduct twice; cancelled orders are skipped.
+  - *Confirmation emails.* Paid checkout orders with no email after 10 minutes
+    are retried through the storefront's `/api/orders/confirmation-email`
+    (shared secret) after 10, 30, 60, 120 and 240 minutes, then the team is
+    told (`confirmation_email_failed`). The email claim keeps every path to one
+    send. Unpaid (held) orders are never emailed.
+- **Redis outages fail fast.** Medusa's own Redis connections wait for Redis
+  forever (BullMQ requires it), so a request would hang. The payment routes
+  (`/hooks/payment/*`, cart complete, Razorpay session, payment mode, and the
+  storefront's confirmation calls) ask Redis first on a separate connection
+  with a 1 second timeout and answer 503 with `Retry-After: 30` while it is
+  down. Razorpay and the storefront retry; the storefront's calls to Medusa time
+  out after 25 seconds. The team is told after 30 seconds down and again on
+  recovery (`redis_down`, `redis_recovered`).
+- **Dispatch override for admin-made orders.** In the order's Shipping panel,
+  "Allow dispatch" (staff sign-in only; API keys are refused; a reason of 10+
+  characters is required) releases an order that is held only because no
+  checkout is behind it. The payment must already be recorded (Medusa admin,
+  mark as paid). Checkout leftovers and replacements cannot be released this
+  way. Each grant and withdrawal is kept in `dispatch_override` (who, when,
+  why) and the team is told (`dispatch_override`).
+- **Alerts are only marked done when they went out.** `/api/ops/notify` now
+  answers `sent: true` only when the alert email was sent, so the backend's
+  "alerted" flags are set only then and a failed alert is tried again.
+
+## Payment safety: production deployment
+
+Do these in order.
+
+1. **Backend (Railway).** Deploy, then in the shell run
+   `npx medusa db:migrate` (adds `payment_price_snapshot` and
+   `dispatch_override`).
+2. **Redis.** Add a Railway Redis service and set `REDIS_URL` on the backend
+   (`${{Redis.REDIS_URL}}`). One Redis per environment: staging and production
+   must not share one, or their queues and locks mix. Redeploy. The log should
+   show "Connection to Redis" for `event-bus-redis`, `workflow-engine-redis` and
+   `locking-redis`, and the Shipping panel must no longer show the Redis
+   warning. `projectConfig.redisUrl` alone does not move anything to Redis.
+3. **Razorpay keys.** In production set `RAZORPAY_ID`, `RAZORPAY_SECRET`,
+   `RAZORPAY_ACCOUNT` and `RAZORPAY_WEBHOOK_SECRET`, and do not define any
+   `RAZORPAY_TEST_*` variable at all: the config prefers them with `??`, so even
+   a blank one overrides the live value.
+4. **Backend to storefront.** `STOREFRONT_REVALIDATE_URL` and
+   `STOREFRONT_REVALIDATE_SECRET` must be set (alerts, email retries). Without
+   them the recovery jobs still repair orders but tell nobody and retry no
+   emails.
+5. **Storefront (Vercel).** Deploy after the backend. Needs
+   `MEDUSA_ADMIN_API_KEY` (Razorpay ids and email claim), the Upstash
+   variables (webhook claims), `STOREFRONT_REVALIDATE_SECRET` (same value as the
+   backend), `RESEND_API_KEY` with `EMAIL_MODE=live`, and a plan that allows
+   `maxDuration = 60` on `/api/razorpay/webhook`.
+6. **Razorpay webhooks.** Add `https://<backend>/hooks/payment/razorpay_razorpay`
+   for `payment.captured` and `payment.authorized` with the backend's
+   `RAZORPAY_WEBHOOK_SECRET`. Keep `https://<storefront>/api/razorpay/webhook`
+   (`payment.captured`, `payment.failed`, `order.paid`).
+7. **Check.** One small real payment: one order, one capture in Medusa, the
+   Razorpay ids on the order, one confirmation email, and a dispatch record.
+   One COD order and one wallet order the same way.
+
+### Remaining limitations
+
+- Medusa does not resume a cart completion that a crash stopped part-way, with
+  or without Redis. The jobs and checks above repair the known leftovers
+  (missing payment record, missing reservations, lost wallet deduction, unsent
+  email, leftover order and its discount-code use); a link Medusa's parallel
+  step did not make on an otherwise complete order (for example order to
+  promotion) is not remade.
+- Finding a cart's leftovers reads order metadata without an index, once per
+  cart change. Fine at EYRA's order volume; add an expression index on
+  `metadata->>'eyra_checkout_cart_id'` if orders grow into the hundreds of
+  thousands.
+- An order voided as a leftover is marked cancelled directly, without Medusa's
+  cancel flow; it never had a payment, so there is nothing to refund.
+- Emails are sent at least once: a crash between sending and marking it sent
+  can send a second copy after the 10 minute claim expires.
+- A request that passed the Redis check just before an outage can still hang
+  until the storefront's 25 second timeout or Razorpay's own timeout; both
+  retry, and every path is idempotent.
+- Razorpay orders opened before this release have no snapshot: Medusa's own
+  webhook ignores them and the storefront webhook completes them.
+- Orders created in Medusa admin need "Allow dispatch" to ship, and their
+  payment recorded first.
 
 ## Release steps
 
-1. Merge the backend and storefront PRs. Order does not matter.
+1. Merge the backend and storefront PRs. Deploy the backend first (the
+   storefront calls its new routes).
 2. Deploy the backend. In the Railway shell, first apply the database changes
    (the start command does not), then run the launch setup **once** per
    environment:
@@ -73,6 +253,11 @@ Medusa allows only one handler per hook, so the wallet check lives there too.
    npx medusa db:migrate
    npx medusa exec ./src/scripts/setup-launch-commerce.ts
    ```
+   `db:migrate` also creates the `payment_price_snapshot` and
+   `dispatch_override` tables. Deploy the backend before the storefront, and
+   follow "Payment safety: production deployment" below for Redis, the Razorpay
+   webhooks and the checks to run.
+
    It creates the two shipping options, the three codes, the tote bag product (a
    hidden product at ₹0 with no stock: set the real count in the admin under
    Inventory, or `TOTE_INITIAL_STOCK` the first time) and the GST rates in

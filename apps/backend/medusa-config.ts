@@ -1,5 +1,6 @@
 import { loadEnv, defineConfig, Modules, ContainerRegistrationKeys } from '@medusajs/framework/utils'
 import { fileModuleEntry, resolveFileStorage } from './src/utils/file-storage'
+import { redisModules } from './src/utils/redis-modules'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
@@ -10,9 +11,9 @@ const fileModule = fileModuleEntry(resolveFileStorage(process.env))
 module.exports = defineConfig({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
-    // Optional — Medusa falls back to an in-memory event bus/workflow engine
-    // when unset, which is fine for a single-instance deployment like this one.
-    redisUrl: process.env.REDIS_URL,
+    // Required in production. This alone does not move the event bus, workflow
+    // engine or locks to Redis; redisModules() below does (see that file).
+    redisUrl: process.env.REDIS_URL || undefined,
     http: {
       storeCors: process.env.STORE_CORS!,
       adminCors: process.env.ADMIN_CORS!,
@@ -29,6 +30,7 @@ module.exports = defineConfig({
   plugins: ['medusa-plugin-razorpay-v2'],
   modules: [
     ...(fileModule ? [fileModule] : []),
+    ...redisModules(),
     {
       resolve: './src/modules/wallet',
     },
@@ -40,6 +42,9 @@ module.exports = defineConfig({
     },
     {
       resolve: './src/modules/credit-note',
+    },
+    {
+      resolve: './src/modules/payment-snapshot',
     },
     {
       resolve: '@medusajs/medusa/payment',

@@ -85,6 +85,34 @@ export async function claimDispatch(
 }
 
 /**
+ * Holds an order back because its payment is not confirmed: the next attempt is
+ * pushed a few minutes out and the reason recorded, without using up a retry.
+ * Only touches an order that is still waiting (`placed` or `dispatch_failed`).
+ */
+export async function deferDispatchForPayment(
+  pg: Pg,
+  orderId: string,
+  reason: string,
+  minutes: number
+): Promise<DispatchRow | null> {
+  const result = await pg.raw(
+    `UPDATE order_dispatch
+        SET window_ends_at = CASE WHEN state = 'placed'
+                                  THEN GREATEST(window_ends_at, now() + (?::int * interval '1 minute'))
+                                  ELSE window_ends_at END,
+            next_attempt_at = CASE WHEN state = 'dispatch_failed'
+                                   THEN now() + (?::int * interval '1 minute')
+                                   ELSE next_attempt_at END,
+            last_error = ?,
+            updated_at = now()
+      WHERE order_id = ? AND state IN ('placed', 'dispatch_failed') AND deleted_at IS NULL
+      RETURNING *`,
+    [minutes, minutes, reason.slice(0, 500), orderId]
+  )
+  return firstRow(result)
+}
+
+/**
  * Gives a claimed order back for a later retry, recording why. Only acts on an
  * order that is still `dispatching`, so it can never undo a finished shipment.
  */

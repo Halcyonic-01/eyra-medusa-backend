@@ -9,6 +9,8 @@ import {
   type DispatchRow,
 } from "../../../../../modules/order-dispatch/transitions"
 import { loadCancellationSummary } from "../../../../../modules/order-dispatch/cancellation-preview"
+import { CHECKOUT_MARKER } from "../../../../../modules/order-dispatch/order-integrity"
+import { loadPaymentStanding, STANDING_MESSAGES } from "../../../../../modules/order-dispatch/payment-standing"
 import { createOrderDispatchWorkflow } from "../../../../../workflows/create-order-dispatch"
 import { dispatchOrderWorkflow } from "../../../../../workflows/dispatch-order"
 
@@ -34,8 +36,25 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
 
   const cancellation = await loadCancellationSummary(req.scope, orderId)
 
+  // Why an order is held from shipping, and whether staff may release it.
+  const standing = await loadPaymentStanding(req.scope, orderId)
+  const [override] = await service.listDispatchOverrides({ order_id: orderId, revoked_at: null }, { take: 1 })
+  const [order] = await req.scope.resolve(Modules.ORDER).listOrders({ id: orderId }, { select: ["id", "status", "metadata"] })
+  const metadata = (order?.metadata ?? {}) as Record<string, unknown>
+  const canOverride =
+    !standing.ok &&
+    standing.reason === "no_cart" &&
+    order?.status !== "canceled" &&
+    typeof metadata[CHECKOUT_MARKER] !== "string" &&
+    !metadata.replacement_for_order
+
   return res.json({
     dispatch: row ? toSnapshot(row as unknown as DispatchRow) : null,
+    payment_standing: standing.ok
+      ? { ok: true, kind: standing.kind }
+      : { ok: false, reason: standing.reason, message: STANDING_MESSAGES[standing.reason] },
+    override: override ?? null,
+    can_override: canOverride,
     cancellation,
     config_problems: [...dispatchConfigProblems(), ...(await storefrontShiprocketProblems())],
   })
