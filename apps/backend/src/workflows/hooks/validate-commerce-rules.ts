@@ -2,6 +2,7 @@ import { MedusaError } from "@medusajs/framework/utils"
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { cartLines, loadCartForRules } from "../../utils/cart-summary"
 import { cartViolations, toNumber } from "../../utils/commerce-rules"
+import { findSharedStockShortfalls } from "../../utils/shared-stock"
 
 type SessionLike = { provider_id?: string | null; status?: string | null }
 
@@ -11,8 +12,8 @@ const PROCESSABLE = ["pending", "requires_more", "authorized"]
 /**
  * Launch-rules part of the last check before a cart becomes an order, whoever
  * is asking: prepaid orders ship free, Cash on Delivery orders carry the COD
- * charge exactly once, and at most one discount code applies and it fits the
- * order value.
+ * charge exactly once, at most one discount code applies and it fits the
+ * order value, and lines sharing stock (an anklet's Single and Pair) fit it together.
  *
  * The storefront keeps all of this right as the cart changes. This is the
  * guarantee for anything that goes round it, such as calling Medusa directly.
@@ -39,6 +40,16 @@ export async function validateCommerceRules(
     amountDue: toNumber(cart.total),
     promoCodes: (loaded.promotions ?? []).map((promotion) => promotion?.code).filter(Boolean) as string[],
   })
+
+  // An anklet's Single and Pair lines share stock, which Medusa checks line by line.
+  problems.push(
+    ...(await findSharedStockShortfalls(
+      container,
+      cartLines(loaded)
+        .filter((line) => line.variant_id)
+        .map((line) => ({ variant_id: line.variant_id as string, quantity: toNumber(line.quantity) || 0 }))
+    ))
+  )
 
   if (problems.length) {
     throw new MedusaError(

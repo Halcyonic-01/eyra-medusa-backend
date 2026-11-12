@@ -5,14 +5,15 @@ import {
   createProductTypesWorkflow,
   createProductsWorkflow,
 } from "@medusajs/medusa/core-flows"
-import { pairPrice } from "../utils/anklet-pair"
+import { syncAnkletPairWorkflow } from "../workflows/sync-anklet-pair"
 
 /**
  * Two example products that use the new variant choices, for trying the
  * storefront locally. Not for production: in production, create the real anklets
  * and pendants in the Medusa admin the same way (see docs/launch-commerce.md).
  *
- *   - Luna Anklet: Pack = Single or Pair. The pair is two singles less Rs 200.
+ *   - Luna Anklet: Pack = Single or Pair. The pair is two singles less Rs 200
+ *     and takes two of the Single's stock; the backend adds it from the Single.
  *   - Moonstone Pendant: Chain = Pendant only, or With silver chain (+Rs 1,000).
  *
  * Safe to run twice; it skips products that exist. Run with:
@@ -75,17 +76,10 @@ export default async function seedVariantDemo({ container }: { container: Medusa
       variants: [
         {
           title: "Single",
-          sku: "luna-anklet-single",
+          sku: "luna-anklet",
           manage_inventory: true,
           options: { Pack: "Single" },
           prices: [{ amount: single, currency_code: "inr" }],
-        },
-        {
-          title: "Pair",
-          sku: "luna-anklet-pair",
-          manage_inventory: true,
-          options: { Pack: "Pair" },
-          prices: [{ amount: pairPrice(single), currency_code: "inr" }],
         },
       ],
     })
@@ -129,14 +123,14 @@ export default async function seedVariantDemo({ container }: { container: Medusa
     await createProductsWorkflow(container).run({ input: { products } })
   }
 
-  // Each variant is stocked on its own. The "With silver chain" stock is the
-  // number of pendants set aside with a chain, separate from the chain products.
-  // Levels are filled in for any of the four that has none, so a rerun repairs a
-  // half-finished first run.
+  // The anklet Pair draws on the Single's stock. The "With silver chain" stock is
+  // the number of pendants set aside with a chain, separate from the chain
+  // products. Levels are filled in for any item that has none, so a rerun repairs
+  // a half-finished first run.
   const { data: items } = await query.graph({
     entity: "inventory_item",
     fields: ["id", "sku", "location_levels.id"],
-    filters: { sku: ["luna-anklet-single", "luna-anklet-pair", "moonstone-pendant-only", "moonstone-pendant-chain"] },
+    filters: { sku: ["luna-anklet", "moonstone-pendant-only", "moonstone-pendant-chain"] },
   })
   const unstocked = items.filter((item) => !item.location_levels?.length)
   if (unstocked.length) {
@@ -150,6 +144,10 @@ export default async function seedVariantDemo({ container }: { container: Medusa
       },
     })
   }
+
+  // The Pair variant, priced and stocked from the Single.
+  const { data: luna } = await query.graph({ entity: "product", fields: ["id"], filters: { handle: "luna-anklet" } })
+  if (luna[0]) await syncAnkletPairWorkflow(container).run({ input: { product_id: luna[0].id } })
 
   logger.info(`Demo products ready (${products.length} created, ${unstocked.length} stocked)`)
 }

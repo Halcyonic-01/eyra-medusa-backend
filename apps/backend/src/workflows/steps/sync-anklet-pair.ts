@@ -1,7 +1,9 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, MedusaError, Modules } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import {
+  batchLinksWorkflow,
+  batchPriceListPricesWorkflow,
   createProductVariantsWorkflow,
   updateProductsWorkflow,
   updateProductVariantsWorkflow,
@@ -11,7 +13,14 @@ import { planPairSync, type PairProduct, type PairVariant } from "../../utils/an
 export type AnkletPairStatus =
   | { status: "skipped"; reason: string }
   | { status: "in_sync" }
-  | { status: "updated"; restructured: boolean; created_pair: boolean; repriced: boolean }
+  | {
+      status: "updated"
+      restructured: boolean
+      created_pair: boolean
+      repriced: boolean
+      sale_prices: number
+      relinked_stock: boolean
+    }
 
 type Row = {
   id: string
@@ -25,6 +34,7 @@ type Row = {
     options?: { value: string; option?: { title: string } | null }[]
     prices?: { id: string; amount: number | string; currency_code: string; price_list_id?: string | null; rules_count?: number | null }[]
     inventory_items?: { inventory_item_id: string; required_quantity: number | string }[]
+    price_set?: { id: string } | null
   }[]
 }
 
@@ -49,6 +59,7 @@ export async function loadPairProduct(container: MedusaContainer, productId: str
       "variants.prices.currency_code",
       "variants.prices.price_list_id",
       "variants.prices.rules_count",
+      "variants.price_set.id",
       "variants.inventory_items.inventory_item_id",
       "variants.inventory_items.required_quantity",
     ],
@@ -56,6 +67,25 @@ export async function loadPairProduct(container: MedusaContainer, productId: str
   })
   const row = data[0] as Row | undefined
   if (!row) return null
+
+  // A variant's prices as loaded above leave out price-list (sale) prices, so
+  // those are read from the variants' price sets.
+  const priceSetIds = (row.variants ?? []).map((variant) => variant.price_set?.id).filter(Boolean) as string[]
+  const { data: listed } = priceSetIds.length
+    ? await query.graph({
+        entity: "price",
+        fields: ["id", "amount", "currency_code", "price_list_id", "rules_count", "price_set_id"],
+        filters: { price_set_id: priceSetIds, price_list_id: { $ne: null } },
+      })
+    : { data: [] }
+  const salePrices = listed as {
+    id: string
+    amount: number | string
+    currency_code: string
+    price_list_id: string | null
+    rules_count?: number | null
+    price_set_id: string
+  }[]
 
   const variants: PairVariant[] = (row.variants ?? []).map((variant) => {
     // The plain INR price: not from a price list, and with no rules such as a region.
@@ -73,6 +103,15 @@ export async function loadPairProduct(container: MedusaContainer, productId: str
           .map((value) => [value.option!.title, value.value])
       ),
       inr: inr ? { id: inr.id, amount: Number(inr.amount) } : null,
+      listPrices: salePrices
+        .filter(
+          (price) =>
+            price.price_set_id === variant.price_set?.id &&
+            price.currency_code === "inr" &&
+            price.price_list_id &&
+            !Number(price.rules_count ?? 0)
+        )
+        .map((price) => ({ id: price.id, price_list_id: price.price_list_id as string, amount: Number(price.amount) })),
       inventory: (variant.inventory_items ?? []).map((item) => ({
         inventory_item_id: item.inventory_item_id,
         required_quantity: Number(item.required_quantity) || 1,
@@ -150,11 +189,38 @@ export const syncAnkletPairStep = createStep(
       if (errors.length) failed("set the Pair price", errors)
     }
 
+    for (const list of plan.listPrices) {
+      const { errors } = await batchPriceListPricesWorkflow(container).run({
+        input: { data: { id: list.price_list_id, create: list.create, update: list.update, delete: list.delete } },
+        throwOnError: false,
+      })
+      if (errors.length) failed("set the Pair's sale price", errors)
+    }
+
+    if (plan.relink) {
+      const link = (inventory_item_id: string, required_quantity?: number) => ({
+        [Modules.PRODUCT]: { variant_id: plan.relink!.variant_id },
+        [Modules.INVENTORY]: { inventory_item_id },
+        ...(required_quantity === undefined ? {} : { data: { required_quantity } }),
+      })
+      const { errors } = await batchLinksWorkflow(container).run({
+        input: {
+          create: plan.relink.create.map((item) => link(item.inventory_item_id, item.required_quantity)),
+          update: plan.relink.update.map((item) => link(item.inventory_item_id, item.required_quantity)),
+          delete: plan.relink.delete.map((id) => link(id)),
+        },
+        throwOnError: false,
+      })
+      if (errors.length) failed("link the Pair to the Single's stock", errors)
+    }
+
     return new StepResponse<AnkletPairStatus>({
       status: "updated",
       restructured: Boolean(plan.restructure),
       created_pair: Boolean(plan.createPair),
       repriced: Boolean(plan.reprice),
+      sale_prices: plan.listPrices.length,
+      relinked_stock: Boolean(plan.relink),
     })
   }
 )
