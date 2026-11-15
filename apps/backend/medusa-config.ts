@@ -47,6 +47,9 @@ module.exports = defineConfig({
       resolve: './src/modules/payment-snapshot',
     },
     {
+      resolve: './src/modules/product-review',
+    },
+    {
       resolve: '@medusajs/medusa/payment',
       dependencies: [Modules.PAYMENT, ContainerRegistrationKeys.LOGGER],
       options: {

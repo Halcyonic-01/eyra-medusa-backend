@@ -5,6 +5,7 @@ import { emailOrderDelivered } from "../../../../modules/order-dispatch/customer
 import { processReturnedParcel } from "../../../../modules/order-dispatch/rto"
 import { applyShiprocketUpdate } from "../../../../modules/order-dispatch/tracking"
 import { postToStorefront } from "../../../../utils/storefront"
+import { requestOrderReviewsWorkflow } from "../../../../workflows/request-order-reviews"
 
 const safeEqual = (a: string, b: string): boolean => {
   const left = Buffer.from(a)
@@ -23,7 +24,7 @@ const text = (value: unknown): string | null => (typeof value === "string" && va
  * same updates here, so either can be the address Shiprocket calls.
  *
  *  - A delivered forward parcel starts the return window, and the customer is
- *    told it arrived (once).
+ *    told it arrived (once) and asked for a review (once).
  *  - A parcel returned to us after a failed or refused delivery gets a credit
  *    note and its refund.
  *  - A reverse pickup we booked that reaches our warehouse is queued for the
@@ -64,6 +65,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     for (const step of outcome.followups) {
       if (step === "delivered" && outcome.order_id) {
         await emailOrderDelivered(req.scope, outcome.order_id)
+        // Ask for a review straight away. A problem here is logged and the job retries; it never fails the update.
+        try {
+          await requestOrderReviewsWorkflow(req.scope).run({ input: { order_id: outcome.order_id } })
+        } catch (error) {
+          logger.error(`[reviews] review request for ${outcome.order_id} not opened now: ${(error as Error).message}`)
+        }
       } else if (step === "rto_delivered" && outcome.order_id) {
         await processReturnedParcel(req.scope, outcome.order_id)
       } else if (step === "reverse_arrived") {
