@@ -9,7 +9,7 @@
  *   - product.type.value      → "ring" | "chain" (normalizeType)
  *   - product.tags[].value    → spec badges (toDetailProduct)
  *   - product option "Size"   → ring size picker + sizeVariantMap (rings only)
- *   - product.metadata        → rating, review_count
+ *   - ratings are never seeded: they come only from approved customer reviews
  *
  * IMPORTANT — price format: Medusa v2 stores `amount` in MAJOR units, not
  * paise. ₹2,499 is seeded here as `2499`, not `249900`. (Confirmed against
@@ -72,20 +72,18 @@ interface SeedProduct {
   images: string[]; // filenames under /images
   inStock: number;
   type: ProductType;
-  rating: number;
-  reviewCount: number;
 }
 
 const PRODUCTS: SeedProduct[] = [
-  { handle: "eyra-signature-silver-ring", name: "Eyra Signature Silver Ring", price: 2499, originalPrice: 4499, description: "Crafted in premium 925 sterling silver with a sleek minimal finish designed for timeless elegance.", images: ["product-1.jpg", "product-2.jpg", "collection-1.jpg", "product-3.jpg"], inStock: 15, type: "ring", rating: 4.4, reviewCount: 128 },
-  { handle: "celestial-band-ring", name: "Celestial Band Ring", price: 1899, originalPrice: 3299, description: "Delicately textured band in 925 sterling silver, perfect for everyday stacking and layering.", images: ["product-2.jpg", "product-1.jpg", "collection-2.jpg", "product-4.jpg"], inStock: 8, type: "ring", rating: 4.2, reviewCount: 84 },
-  { handle: "serpentine-silver-chain", name: "Serpentine Silver Chain", price: 3299, originalPrice: 5499, description: "A bold serpentine-link chain in 925 sterling silver, engineered for modern luxury and durability.", images: ["product-3.jpg", "product-1.jpg", "collection-3.jpg", "product-5.jpg"], inStock: 12, type: "chain", rating: 4.6, reviewCount: 210 },
-  { handle: "sovereign-signet-ring", name: "Sovereign Signet Ring", price: 4999, originalPrice: 7499, description: "A heavy-gauge signet ring in pure 925 sterling silver, hand-polished to a mirror finish.", images: ["product-1.jpg", "product-3.jpg", "collection-3.jpg", "product-2.jpg"], inStock: 5, type: "ring", rating: 4.7, reviewCount: 62 },
-  { handle: "rope-twist-chain", name: "Rope Twist Chain", price: 1499, originalPrice: 2799, description: "Classic rope-twist link chain in 925 sterling silver, timeless and versatile for all looks.", images: ["product-2.jpg", "product-3.jpg", "collection-1.jpg", "product-5.jpg"], inStock: 30, type: "chain", rating: 4.1, reviewCount: 145 },
-  { handle: "figaro-link-chain", name: "Figaro Link Chain", price: 2799, originalPrice: 4799, description: "The iconic Figaro pattern reimagined in sterling silver — a staple for the modern wardrobe.", images: ["product-3.jpg", "product-2.jpg", "collection-2.jpg", "product-4.jpg"], inStock: 14, type: "chain", rating: 4.4, reviewCount: 88 },
-  { handle: "eternity-stacking-ring", name: "Eternity Stacking Ring", price: 3499, originalPrice: 5999, description: "A slim eternity band set with hand-placed cubic zirconia in gleaming 925 sterling silver.", images: ["product-4.jpg", "product-1.jpg", "collection-3.jpg", "product-3.jpg"], inStock: 7, type: "ring", rating: 4.8, reviewCount: 203 },
-  { handle: "geometric-dome-ring", name: "Geometric Dome Ring", price: 2999, originalPrice: 5299, description: "An architectural dome ring in 925 sterling silver, a statement piece for the design-forward.", images: ["product-1.jpg", "product-5.jpg", "collection-2.jpg", "product-2.jpg"], inStock: 9, type: "ring", rating: 4.5, reviewCount: 111 },
-  { handle: "box-link-statement-chain", name: "Box Link Statement Chain", price: 5499, originalPrice: 8999, description: "Chunky box-link chain in heavyweight 925 sterling silver — bold, structural, and unforgettable.", images: ["product-2.jpg", "product-3.jpg", "collection-3.jpg", "product-4.jpg"], inStock: 4, type: "chain", rating: 4.6, reviewCount: 74 },
+  { handle: "eyra-signature-silver-ring", name: "Eyra Signature Silver Ring", price: 2499, originalPrice: 4499, description: "Crafted in premium 925 sterling silver with a sleek minimal finish designed for timeless elegance.", images: ["product-1.jpg", "product-2.jpg", "collection-1.jpg", "product-3.jpg"], inStock: 15, type: "ring" },
+  { handle: "celestial-band-ring", name: "Celestial Band Ring", price: 1899, originalPrice: 3299, description: "Delicately textured band in 925 sterling silver, perfect for everyday stacking and layering.", images: ["product-2.jpg", "product-1.jpg", "collection-2.jpg", "product-4.jpg"], inStock: 8, type: "ring" },
+  { handle: "serpentine-silver-chain", name: "Serpentine Silver Chain", price: 3299, originalPrice: 5499, description: "A bold serpentine-link chain in 925 sterling silver, engineered for modern luxury and durability.", images: ["product-3.jpg", "product-1.jpg", "collection-3.jpg", "product-5.jpg"], inStock: 12, type: "chain" },
+  { handle: "sovereign-signet-ring", name: "Sovereign Signet Ring", price: 4999, originalPrice: 7499, description: "A heavy-gauge signet ring in pure 925 sterling silver, hand-polished to a mirror finish.", images: ["product-1.jpg", "product-3.jpg", "collection-3.jpg", "product-2.jpg"], inStock: 5, type: "ring" },
+  { handle: "rope-twist-chain", name: "Rope Twist Chain", price: 1499, originalPrice: 2799, description: "Classic rope-twist link chain in 925 sterling silver, timeless and versatile for all looks.", images: ["product-2.jpg", "product-3.jpg", "collection-1.jpg", "product-5.jpg"], inStock: 30, type: "chain" },
+  { handle: "figaro-link-chain", name: "Figaro Link Chain", price: 2799, originalPrice: 4799, description: "The iconic Figaro pattern reimagined in sterling silver — a staple for the modern wardrobe.", images: ["product-3.jpg", "product-2.jpg", "collection-2.jpg", "product-4.jpg"], inStock: 14, type: "chain" },
+  { handle: "eternity-stacking-ring", name: "Eternity Stacking Ring", price: 3499, originalPrice: 5999, description: "A slim eternity band set with hand-placed cubic zirconia in gleaming 925 sterling silver.", images: ["product-4.jpg", "product-1.jpg", "collection-3.jpg", "product-3.jpg"], inStock: 7, type: "ring" },
+  { handle: "geometric-dome-ring", name: "Geometric Dome Ring", price: 2999, originalPrice: 5299, description: "An architectural dome ring in 925 sterling silver, a statement piece for the design-forward.", images: ["product-1.jpg", "product-5.jpg", "collection-2.jpg", "product-2.jpg"], inStock: 9, type: "ring" },
+  { handle: "box-link-statement-chain", name: "Box Link Statement Chain", price: 5499, originalPrice: 8999, description: "Chunky box-link chain in heavyweight 925 sterling silver — bold, structural, and unforgettable.", images: ["product-2.jpg", "product-3.jpg", "collection-3.jpg", "product-4.jpg"], inStock: 4, type: "chain" },
 ];
 
 const ALL_SPECS = Array.from(
@@ -294,7 +292,6 @@ export default async function seedEyra({ container }: { container: MedusaContain
       thumbnail: images[0].url,
       images,
       weight: TYPE_WEIGHT_G[p.type],
-      metadata: { rating: p.rating, review_count: p.reviewCount },
       shipping_profile_id: shippingProfile.id,
       sales_channels: [{ id: salesChannel.id }],
       options,

@@ -8,6 +8,7 @@ import { paymentHookMiddlewares } from "./hooks/middlewares"
 import { redisGateMiddlewares } from "./redis-gate"
 import { cartLeftoverMiddlewares } from "./store/carts/leftover-guard"
 import { orderConfirmationMiddlewares } from "./admin/razorpay-confirmations/middlewares"
+import { reviewMiddlewares } from "./review-middlewares"
 
 export default defineMiddlewares({
   routes: [
@@ -28,5 +29,6 @@ export default defineMiddlewares({
     ...paymentHookMiddlewares,
     ...orderConfirmationMiddlewares,
     ...creditNoteMiddlewares,
+    ...reviewMiddlewares,
   ],
 })
