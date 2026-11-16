@@ -295,6 +295,25 @@
           "nullable": true,
           "mappedType": "text"
         },
+        "fee_refund_id": {
+          "name": "fee_refund_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "fee_refunded_at": {
+          "name": "fee_refunded_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
         "replacement_order_id": {
           "name": "replacement_order_id",
           "type": "text",

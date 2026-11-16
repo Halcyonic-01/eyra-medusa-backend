@@ -101,6 +101,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
                 amount_due: request.amount_due === null ? null : toNumber(request.amount_due),
                 fee_link_url: request.fee_link_url,
                 fee_paid_at: request.fee_paid_at,
+                fee_refunded_at: request.fee_refunded_at,
                 payment_required: exchangePaymentDue(toNumber(request.amount_due)),
                 replacement_order_id: request.replacement_order_id,
               }
