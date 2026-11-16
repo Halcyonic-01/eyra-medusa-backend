@@ -16,7 +16,7 @@ export type ReturnRequestReason = (typeof ALL_REASONS)[number]
  *
  * - pending:                   waiting for our team (an older request, delivery that could
  *                              not be confirmed, or a reverse pickup that could not be booked)
- * - pending_fee:               an exchange waiting for the ₹99 handling fee (and any price difference) to be paid
+ * - pending_fee:               an exchange waiting for the price difference to be paid
  * - reverse_pickup_scheduled:  the courier has been booked to collect the item
  * - awaiting_inspection:       the item reached us and is waiting for the quality check
  * - approved:                  done: the credit was issued (or the replacement sent)

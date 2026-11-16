@@ -93,13 +93,19 @@ export function startFakeStorefront(
   })
 }
 
-export type RazorpayBehaviour = { paymentLink: "ok" | "fail" }
-export type RazorpayCall = { path: string; body: any }
+export type RazorpayBehaviour = { paymentLink: "ok" | "fail" | "reject_contact" }
+export type RazorpayCall = { path: string; method: string; body: any }
+export type FakeLink = { id: string; status: string; amount: number; amount_paid: number; payments: { payment_id: string; status: string }[] }
 
-/** A stand-in for Razorpay's REST API: it makes payment links, and records what it was asked. */
+/**
+ * A stand-in for Razorpay's REST API: it makes payment links, reports them, and
+ * cancels them, and records what it was asked. A test pays or expires a link
+ * with `links.get(id)` and changing it, as if the customer had acted.
+ */
 export function startFakeRazorpay(port: number) {
   const calls: RazorpayCall[] = []
   const behaviour: RazorpayBehaviour = { paymentLink: "ok" }
+  const links = new Map<string, FakeLink>()
   let seq = 0
   const server = http.createServer((req, res) => {
     const json = (status: number, body: unknown) =>
@@ -113,11 +119,30 @@ export function startFakeRazorpay(port: number) {
       } catch {
         body = {}
       }
-      calls.push({ path: req.url ?? "", body })
+      calls.push({ path: req.url ?? "", method: req.method ?? "", body })
       if (req.method === "POST" && req.url === "/payment_links") {
         if (behaviour.paymentLink === "fail") return json(400, { error: { description: "The amount is invalid" } })
+        // As Razorpay does for a phone like 9999999999.
+        if (behaviour.paymentLink === "reject_contact" && body.customer?.contact) {
+          return json(400, { error: { description: "Recurring digits in customer contact are disallowed" } })
+        }
         seq += 1
-        return json(200, { id: `plink_FAKE${seq}`, short_url: `https://rzp.io/i/fake${seq}`, status: "created", amount: body.amount })
+        const link: FakeLink = { id: `plink_FAKE${seq}`, status: "created", amount: body.amount, amount_paid: 0, payments: [] }
+        links.set(link.id, link)
+        return json(200, { ...link, short_url: `https://rzp.io/i/fake${seq}` })
+      }
+      const cancel = /^\/payment_links\/([^/]+)\/cancel$/.exec(req.url ?? "")
+      if (req.method === "POST" && cancel) {
+        const link = links.get(cancel[1])
+        if (!link) return json(404, { error: { description: "not found" } })
+        if (link.status === "paid") return json(400, { error: { description: "Payment link cannot be cancelled as it is already paid" } })
+        link.status = "cancelled"
+        return json(200, link)
+      }
+      const read = /^\/payment_links\/([^/]+)$/.exec(req.url ?? "")
+      if (req.method === "GET" && read) {
+        const link = links.get(read[1])
+        return link ? json(200, link) : json(404, { error: { description: "not found" } })
       }
       json(404, { error: { description: "not found" } })
     })
@@ -125,8 +150,9 @@ export function startFakeRazorpay(port: number) {
   return new Promise<{
     calls: RazorpayCall[]
     behaviour: RazorpayBehaviour
+    links: Map<string, FakeLink>
     close: () => Promise<void>
   }>((resolve) => {
-    server.listen(port, "127.0.0.1", () => resolve({ calls, behaviour, close: () => new Promise((done) => server.close(() => done())) }))
+    server.listen(port, "127.0.0.1", () => resolve({ calls, behaviour, links, close: () => new Promise((done) => server.close(() => done())) }))
   })
 }

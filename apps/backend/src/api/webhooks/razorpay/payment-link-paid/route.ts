@@ -3,9 +3,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { RETURN_REQUEST_MODULE } from "../../../../modules/return-request"
 import type ReturnRequestModuleService from "../../../../modules/return-request/service"
-import { toNumber } from "../../../../modules/wallet/utils"
-import { postToStorefront } from "../../../../utils/storefront"
-import { bookPickupFor } from "../../../../workflows/steps/start-return-flow"
+import { settleExchangePayment } from "../../../../modules/return-request/exchange-payment"
 
 function signatureValid(rawBody: string, received: string, secret: string): boolean {
   const expected = Buffer.from(createHmac("sha256", secret).update(rawBody).digest("hex"), "hex")
@@ -22,15 +20,21 @@ type LinkEvent = {
   }
 }
 
+/** Razorpay names it payment_link.paid; the spec writes it payment.link.paid. Both are the same event. */
+const PAID = ["payment_link.paid", "payment.link.paid"]
+const CLOSED = ["payment_link.expired", "payment_link.cancelled", "payment.link.expired", "payment.link.cancelled"]
+
 /**
  * POST /webhooks/razorpay/payment-link-paid
  *
- * Razorpay tells us a payment link was paid. The signature (HMAC-SHA256 of the
- * raw body with RAZORPAY_WEBHOOK_SECRET) is checked first; with no secret set
- * the route is closed. For an exchange waiting for its price difference, a paid link moves it from pending_fee to
- * reverse_pickup_scheduled and books the courier. A link paid for less than was
- * asked is not accepted. A repeat of the same event does nothing. Anything else is
- * acknowledged and ignored, so Razorpay does not keep retrying it.
+ * Razorpay tells us about an exchange's payment link. The signature (HMAC-SHA256
+ * of the raw body with RAZORPAY_WEBHOOK_SECRET) is checked first; with no secret
+ * set the route is closed. What happens next is `settleExchangePayment`'s: a link
+ * paid in full moves the exchange on and books the courier, a link paid after the
+ * exchange was closed is refunded, an expired or cancelled link closes the
+ * exchange, and a link paid for less than was asked is not accepted. A repeat of
+ * the same event does nothing. Anything else is acknowledged and ignored, so
+ * Razorpay does not keep retrying it.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER)
@@ -48,45 +52,39 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   }
 
   const event = (req.body ?? {}) as LinkEvent
-  // Razorpay names it payment_link.paid; the spec writes it payment.link.paid. Both are the same event.
-  if (event.event !== "payment_link.paid" && event.event !== "payment.link.paid") {
+  const isPaid = PAID.includes(event.event ?? "")
+  if (!isPaid && !CLOSED.includes(event.event ?? "")) {
     return res.status(200).json({ received: true, acted: false, reason: "ignored_event" })
   }
 
   const link = event.payload?.payment_link?.entity
-  const paymentId = event.payload?.payment?.entity?.id ?? null
   if (!link?.id) return res.status(200).json({ received: true, acted: false, reason: "missing_link" })
 
   const service: ReturnRequestModuleService = req.scope.resolve(RETURN_REQUEST_MODULE)
   const [byLink] = await service.listReturnRequests({ fee_link_id: link.id }, { take: 1 })
   const [byReference] = byLink || !link.reference_id ? [undefined] : await service.listReturnRequests({ id: link.reference_id }, { take: 1 })
   const request = byLink ?? byReference
-  if (!request || (request.fee_link_id && request.fee_link_id !== link.id)) {
+  if (!request || request.fee_link_id !== link.id) {
     return res.status(200).json({ received: true, acted: false, reason: "unknown_link" })
-  }
-  if (request.status !== "pending_fee") {
-    return res.status(200).json({ received: true, acted: false, reason: "already_processed" })
-  }
-
-  const dueP = Math.round(toNumber(request.amount_due) * 100)
-  const paidP = Number(link.amount_paid ?? event.payload?.payment?.entity?.amount ?? 0)
-  if (link.status !== "paid" || paidP < dueP) {
-    logger.error(`[razorpay] link ${link.id} for ${request.id} was paid ${paidP} paise, ${dueP} was asked`)
-    await postToStorefront(
-      "/api/ops/notify",
-      { type: "exchange_payment_short", return_request_id: request.id, order_id: request.order_id, asked: dueP / 100, paid: paidP / 100 },
-      logger
-    )
-    return res.status(200).json({ received: true, acted: false, reason: "amount_short" })
   }
 
   try {
-    await service.updateReturnRequests({ id: request.id, fee_paid_at: new Date(), fee_payment_id: paymentId })
-    const outcome = await bookPickupFor(req.scope, request.id)
-    return res.status(200).json({ received: true, acted: true, request_id: request.id, outcome })
+    const result = await settleExchangePayment(req.scope, request.id, {
+      link_id: link.id,
+      // A paid event whose link is not marked paid (a partial payment) is treated as unpaid.
+      status: isPaid ? (link.status ?? "paid") : (link.status ?? event.event!.split(".").pop()!),
+      paid_paise: Number(link.amount_paid ?? event.payload?.payment?.entity?.amount ?? 0),
+      payment_id: event.payload?.payment?.entity?.id ?? null,
+    })
+    if (result.acted) return res.status(200).json({ received: true, acted: true, request_id: request.id, outcome: result.outcome })
+    // A paid event for a link that is not paid in full is a short payment.
+    if (isPaid && result.reason === "waiting") {
+      return res.status(200).json({ received: true, acted: false, reason: "amount_short" })
+    }
+    return res.status(200).json({ received: true, acted: false, reason: result.reason })
   } catch (error) {
-    logger.error(`[razorpay] could not move ${request.id} on after its fee was paid: ${(error as Error).message}`)
-    // 500 so Razorpay sends it again; the fee is already recorded and booking is safe to repeat.
+    logger.error(`[razorpay] could not act on the link event for ${request.id}: ${(error as Error).message}`)
+    // 500 so Razorpay sends it again; everything it starts is safe to repeat.
     return res.status(500).json({ error: "Could not process the payment" })
   }
 }

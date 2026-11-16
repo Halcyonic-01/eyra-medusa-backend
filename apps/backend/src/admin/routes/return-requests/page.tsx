@@ -48,6 +48,7 @@ type ReturnRequest = {
     amount_due: number | null
     fee_link_url: string | null
     fee_paid_at: string | null
+    fee_refunded_at: string | null
     payment_required: boolean
     replacement_order_id: string | null
   } | null
@@ -378,7 +379,7 @@ const ReturnRequestsPage = () => {
                         <Text size="xsmall" className="text-ui-fg-subtle">
                           For {request.exchange.replacement_title ?? "a replacement"}
                           {request.exchange.payment_required
-                            ? `; difference ${rupees(request.exchange.amount_due ?? 0)}${request.exchange.fee_paid_at ? " (paid)" : " (to pay)"}`
+                            ? `; difference ${rupees(request.exchange.amount_due ?? 0)}${request.exchange.fee_refunded_at ? " (paid, refunded)" : request.exchange.fee_paid_at ? " (paid)" : " (to pay)"}`
                             : "; no payment due"}
                         </Text>
                       )}
@@ -423,6 +424,17 @@ const ReturnRequestsPage = () => {
                             isLoading={act.isPending}
                           >
                             Retry pickup
+                          </Button>
+                        )}
+                        {/* An exchange that waited for our team and owes a difference: send its payment link. */}
+                        {request.status === "pending" && request.type === "exchange" && request.exchange?.payment_required && !request.exchange?.fee_paid_at && (
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            onClick={() => act.mutate({ id: request.id, action: "retry-pickup" })}
+                            isLoading={act.isPending}
+                          >
+                            Send payment link
                           </Button>
                         )}
                         {request.status === "pending" && (

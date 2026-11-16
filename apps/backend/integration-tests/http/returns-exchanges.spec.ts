@@ -3,6 +3,7 @@ import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 import { ContainerRegistrationKeys, Modules, ProductStatus } from "@medusajs/framework/utils"
 import { createApiKeysWorkflow, createInventoryLevelsWorkflow, createProductsWorkflow } from "@medusajs/medusa/core-flows"
 import finishReceivedReturnsJob from "../../src/jobs/finish-received-returns"
+import syncExchangePaymentsJob from "../../src/jobs/sync-exchange-payments"
 import { checkoutFlow } from "./helpers/checkout-flow"
 import { markDelivered } from "./helpers/delivery"
 import { startFakeRazorpay, startFakeS3 } from "./helpers/fake-servers"
@@ -661,6 +662,292 @@ medusaIntegrationTestRunner({
           const replacements = (orders as any[]).filter((order) => order.metadata?.exchange_request_id === row.id)
           expect(replacements).toHaveLength(1)
           expect(await notes(placed.orderId)).toHaveLength(1)
+        })
+      })
+
+      describe("the price difference of an exchange, end to end", () => {
+        const exchangeBody = (placed: { orderId: string; id: string }, itemId: string, variantId: string) => ({
+          customer_id: placed.id, order_id: placed.orderId, type: "exchange", reason: "SIZE_ISSUE",
+          items: [{ item_id: itemId, quantity: 1 }], replacement_variant_id: variantId,
+        })
+        const quote = (body: Record<string, unknown>) => flow.attempt(api.post("/admin/return-requests/quote", body, { headers: admin }))
+        const checkPayment = (id: string) => flow.attempt(api.post(`/admin/return-requests/${id}/payment-status`, {}, { headers: admin }))
+        const reject = (id: string, note = "Not accepted") =>
+          flow.attempt(api.post(`/admin/return-requests/${id}/reject`, { note }, { headers: admin }))
+        /** The customer pays the link on Razorpay's page. */
+        const payLink = (linkId: string, paise: number, paymentId = "pay_DIFF1") => {
+          const link = razorpay.links.get(linkId)!
+          Object.assign(link, { status: "paid", amount_paid: paise, payments: [{ payment_id: paymentId, status: "captured" }] })
+        }
+        const linkEvent = (name: string, link: { id: string; reference_id: string }, status: string, paise: number) =>
+          JSON.stringify({
+            event: name,
+            payload: {
+              payment_link: { entity: { id: link.id, reference_id: link.reference_id, status, amount: paise, amount_paid: name.endsWith("paid") ? paise : 0 } },
+              ...(name.endsWith("paid") ? { payment: { entity: { id: "pay_DIFF1", amount: paise, status: "captured" } } } : {}),
+            },
+          })
+        const cancelCalls = () => razorpay.calls.filter((c) => /\/payment_links\/[^/]+\/cancel$/.test(c.path))
+
+        it("paid 2,000 for a 2,500 replacement: the quote, the link and the payment are all 500, and paying it books the courier", async () => {
+          const placed = await delivered()
+          const itemId = await ringId(placed.orderId)
+
+          // What the customer is shown before confirming.
+          const quoted: any = await quote(exchangeBody(placed, itemId, fx.variantByPrice[2500]))
+          expect(quoted.ok).toBe(true)
+          expect(quoted.data.quote).toMatchObject({ type: "exchange", paid_value: 2000, replacement_price: 2500, price_difference: 500, amount_due: 500, credit: 0 })
+          // A quote saves nothing and asks Razorpay for nothing.
+          expect(await (getContainer().resolve("returnRequest") as any).listReturnRequests({ order_id: placed.orderId })).toHaveLength(0)
+          expect(razorpay.calls).toHaveLength(0)
+
+          const created: any = await request(exchangeBody(placed, itemId, fx.variantByPrice[2500]))
+          expect(created.ok).toBe(true)
+          const row = await get(created.data.return_request.id)
+          expect(row.status).toBe("pending_fee")
+          expect(Number(row.amount_due)).toBe(500)
+          const [linkCall] = razorpay.calls
+          expect(linkCall.body).toMatchObject({ amount: 50000, currency: "INR", accept_partial: false, reference_id: row.id })
+          // Razorpay brings the customer back to the order, naming the exchange.
+          expect(linkCall.body.callback_url).toBe(`http://127.0.0.1:${STOREFRONT_PORT}/orders/${placed.orderId}?exchange=${row.id}`)
+          const whatsapp = storefront.callsTo("/api/whatsapp/send").find((c) => c.body.template === "exchange_payment_link")
+          expect(whatsapp?.body.params).toMatchObject({ amount: 500, link: row.fee_link_url })
+
+          // Before paying, a check changes nothing.
+          expect(((await checkPayment(row.id)) as any).data.result).toMatchObject({ acted: false, reason: "waiting" })
+
+          // The customer pays and comes back: the check finds it, without any webhook.
+          payLink(row.fee_link_id, 50000)
+          const checked: any = await checkPayment(row.id)
+          expect(checked.data.result).toMatchObject({ acted: true, outcome: "pickup_booked" })
+          const paid = await get(row.id)
+          expect(paid.status).toBe("reverse_pickup_scheduled")
+          expect(paid.fee_payment_id).toBe("pay_DIFF1")
+          expect(paid.fee_paid_at).toBeTruthy()
+
+          // The webhook arriving later, and another check, do nothing more.
+          const late = linkEvent("payment_link.paid", { id: row.fee_link_id, reference_id: row.id }, "paid", 50000)
+          expect(((await postLinkEvent(late, sign(late))) as any).data).toMatchObject({ acted: false, reason: "already_processed" })
+          expect(((await checkPayment(row.id)) as any).data.result).toMatchObject({ acted: false, reason: "already_processed" })
+          expect(storefront.callsTo("/api/returns/reverse-pickup")).toHaveLength(1)
+
+          // The parcel arrives and passes: the replacement goes out at 2,500, with nothing to collect and no credit.
+          await sendTracking({ order_id: paid.reverse_order_ref, awb: paid.reverse_awb, current_status: "DELIVERED" })
+          await received(row.id)
+          const done = await waitFor(() => get(row.id), (value) => value.status === "approved")
+          expect(done.status).toBe("approved")
+          const query = getContainer().resolve(ContainerRegistrationKeys.QUERY)
+          const { data } = await query.graph({ entity: "order", fields: ["total", "metadata"], filters: { id: done.replacement_order_id } })
+          expect(Number((data[0] as any).total)).toBe(2500)
+          expect((data[0] as any).metadata).toMatchObject({ replacement_for_order: placed.orderId, exchange_request_id: row.id })
+          expect(await credits(placed.orderId)).toHaveLength(0)
+          expect(done.fee_refunded_at).toBeNull()
+        })
+
+        it("a phone Razorpay refuses does not block the exchange: the link is made without it", async () => {
+          razorpay.behaviour.paymentLink = "reject_contact"
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          expect(created.ok).toBe(true)
+          const row = await get(created.data.return_request.id)
+          expect(row.status).toBe("pending_fee")
+          const tries = razorpay.calls.filter((c) => c.path === "/payment_links")
+          expect(tries).toHaveLength(2)
+          expect(tries[0].body.customer.contact).toMatch(/^\+91\d{10}$/)
+          // The second try leaves the phone (and the SMS) out, and keeps everything else.
+          expect(tries[1].body.customer.contact).toBeUndefined()
+          expect(tries[1].body.notify.sms).toBe(false)
+          expect(tries[1].body).toMatchObject({ amount: 50000, reference_id: row.id })
+        })
+
+        it("the same value asks for nothing; a lower value asks for nothing and gives the difference as store credit", async () => {
+          for (const [price, due, credit] of [[2000, 0, 0], [1500, 0, 500]] as const) {
+            const placed = await delivered()
+            const itemId = await ringId(placed.orderId)
+            const quoted: any = await quote(exchangeBody(placed, itemId, fx.variantByPrice[price]))
+            expect(quoted.data.quote).toMatchObject({ amount_due: due, credit, price_difference: price - 2000 })
+            const created: any = await request(exchangeBody(placed, itemId, fx.variantByPrice[price]))
+            const row = await get(created.data.return_request.id)
+            expect(row.status).toBe("reverse_pickup_scheduled")
+            expect(row.fee_link_id).toBeNull()
+            // Nothing to check: no link exists.
+            expect(((await checkPayment(row.id)) as any).data.result).toMatchObject({ acted: false, reason: "no_link" })
+            await sendTracking({ order_id: row.reverse_order_ref, awb: row.reverse_awb, current_status: "DELIVERED" })
+            await received(row.id)
+            const done = await waitFor(() => get(row.id), (value) => value.status === "approved")
+            expect(done.status).toBe("approved")
+            const issued = await credits(placed.orderId)
+            expect(issued.reduce((sum, c) => sum + Number(c.amount), 0)).toBe(credit)
+          }
+          expect(razorpay.calls.filter((c) => c.path === "/payment_links")).toHaveLength(0)
+        })
+
+        it("the quote refuses what a request would refuse", async () => {
+          const placed = await delivered()
+          const soldOut: any = await quote(exchangeBody(placed, await ringId(placed.orderId), soldOutVariant))
+          expect(soldOut.ok).toBe(false)
+          expect(soldOut.message).toMatch(/out of stock/)
+        })
+
+        it("a link that expires unpaid closes the exchange, tells the customer, and frees the item for a new request", async () => {
+          const placed = await delivered()
+          const itemId = await ringId(placed.orderId)
+          const created: any = await request(exchangeBody(placed, itemId, fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          razorpay.links.get(row.fee_link_id)!.status = "expired"
+
+          const checked: any = await checkPayment(row.id)
+          expect(checked.data.result).toMatchObject({ acted: true, outcome: "closed_expired" })
+          const closed = await get(row.id)
+          expect(closed.status).toBe("rejected")
+          expect(closed.resolution_note).toMatch(/payment link expired/)
+
+          // The item is free again.
+          const again: any = await request(exchangeBody(placed, itemId, fx.variantByPrice[2500]))
+          expect(again.ok).toBe(true)
+        })
+
+        it("Razorpay's expired event closes it too", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          const event = linkEvent("payment_link.expired", { id: row.fee_link_id, reference_id: row.id }, "expired", 50000)
+          const result: any = await postLinkEvent(event, sign(event))
+          expect(result.data).toMatchObject({ acted: true, outcome: "closed_expired" })
+          expect((await get(row.id)).status).toBe("rejected")
+        })
+
+        it("declining an exchange that is waiting for its payment cancels the link, so it cannot be paid", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          expect(((await reject(row.id)) as any).ok).toBe(true)
+          expect(cancelCalls().map((c) => c.path)).toEqual([`/payment_links/${row.fee_link_id}/cancel`])
+          expect(razorpay.links.get(row.fee_link_id)!.status).toBe("cancelled")
+          const after = await get(row.id)
+          expect(after.status).toBe("rejected")
+          expect(after.fee_refunded_at).toBeNull()
+        })
+
+        it("a payment that lands as the exchange is declined is refunded, once", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          // Paid a moment before the decline: the link can no longer be cancelled.
+          payLink(row.fee_link_id, 50000)
+          expect(((await reject(row.id)) as any).ok).toBe(true)
+          const refunded = await get(row.id)
+          expect(refunded.status).toBe("rejected")
+          expect(refunded.fee_payment_id).toBe("pay_DIFF1")
+          expect(refunded.fee_refund_id).toBe(`rfnd_FAKE_exchange-${row.id}`)
+          expect(refunded.fee_refunded_at).toBeTruthy()
+          // The webhook for that payment then changes nothing, and books nothing.
+          const event = linkEvent("payment_link.paid", { id: row.fee_link_id, reference_id: row.id }, "paid", 50000)
+          expect(((await postLinkEvent(event, sign(event))) as any).data).toMatchObject({ acted: false, reason: "already_processed" })
+          expect(storefront.callsTo("/api/returns/reverse-pickup")).toHaveLength(0)
+        })
+
+        it("a payment reported only after the decline is refunded when it is reported", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          await reject(row.id)
+          expect((await get(row.id)).fee_paid_at).toBeNull()
+          // Razorpay says it was paid after all (the cancel and the payment crossed).
+          const event = linkEvent("payment_link.paid", { id: row.fee_link_id, reference_id: row.id }, "paid", 50000)
+          const result: any = await postLinkEvent(event, sign(event))
+          expect(result.data).toMatchObject({ acted: true, outcome: "refunded" })
+          const after = await get(row.id)
+          expect(after.status).toBe("rejected")
+          expect(after.fee_refunded_at).toBeTruthy()
+          expect(storefront.callsTo("/api/returns/reverse-pickup")).toHaveLength(0)
+        })
+
+        it("declining after the difference was paid refunds it", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          const event = linkEvent("payment_link.paid", { id: row.fee_link_id, reference_id: row.id }, "paid", 50000)
+          await postLinkEvent(event, sign(event))
+          expect((await get(row.id)).status).toBe("reverse_pickup_scheduled")
+          expect(((await reject(row.id, "The item failed our check")) as any).ok).toBe(true)
+          const after = await get(row.id)
+          expect(after.status).toBe("rejected")
+          expect(after.fee_refund_id).toBe(`rfnd_FAKE_exchange-${row.id}`)
+          // Nothing to cancel: it was paid.
+          expect(cancelCalls()).toHaveLength(0)
+        })
+
+        it("a refund Razorpay refuses is reported to the team, and the job refunds it later", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          const event = linkEvent("payment_link.paid", { id: row.fee_link_id, reference_id: row.id }, "paid", 50000)
+          await postLinkEvent(event, sign(event))
+
+          process.env.REFUND_GATEWAY = "fake_fail"
+          try {
+            expect(((await reject(row.id)) as any).ok).toBe(true)
+          } finally {
+            process.env.REFUND_GATEWAY = "fake"
+          }
+          const failed = await get(row.id)
+          expect(failed.status).toBe("rejected")
+          expect(failed.fee_refunded_at).toBeNull()
+          expect(storefront.callsTo("/api/ops/notify").some((c) => c.body.type === "exchange_refund_failed" && c.body.amount === 500)).toBe(true)
+
+          await syncExchangePaymentsJob(getContainer())
+          expect((await get(row.id)).fee_refund_id).toBe(`rfnd_FAKE_exchange-${row.id}`)
+        })
+
+        it("two copies of the paid event at the same moment book the courier once", async () => {
+          const placed = await delivered()
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          const event = linkEvent("payment_link.paid", { id: row.fee_link_id, reference_id: row.id }, "paid", 50000)
+          const results: any[] = await Promise.all([postLinkEvent(event, sign(event)), postLinkEvent(event, sign(event)), checkPayment(row.id)])
+          expect(results.every((r) => r.ok)).toBe(true)
+          expect(storefront.callsTo("/api/returns/reverse-pickup")).toHaveLength(1)
+          expect((await get(row.id)).status).toBe("reverse_pickup_scheduled")
+        })
+
+        it("an exchange that waited for our team, because delivery was not confirmed, is sent its link by staff", async () => {
+          const placed = await shippedOrder(getContainer(), flow, fx)
+          const created: any = await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))
+          const row = await get(created.data.return_request.id)
+          expect(row.status).toBe("pending")
+          expect(row.fee_link_id).toBeNull()
+          expect(razorpay.calls).toHaveLength(0)
+
+          const sent: any = await flow.attempt(api.post(`/admin/return-requests/${row.id}/retry-pickup`, {}, { headers: admin }))
+          expect(sent.ok).toBe(true)
+          expect(sent.data).toMatchObject({ outcome: "payment_link_created", return_request: { status: "pending_fee" } })
+          const after = await get(row.id)
+          expect(after.fee_link_id).toMatch(/^plink_FAKE/)
+          expect(razorpay.calls[0].body.amount).toBe(50000)
+          expect(storefront.callsTo("/api/returns/reverse-pickup")).toHaveLength(0)
+
+          payLink(after.fee_link_id, 50000)
+          expect(((await checkPayment(row.id)) as any).data.result).toMatchObject({ acted: true, outcome: "pickup_booked" })
+        })
+
+        it("the payment check job finds payments and expiries the webhook never reported", async () => {
+          const placed = await delivered()
+          const paidRow = await get(((await request(exchangeBody(placed, await ringId(placed.orderId), fx.variantByPrice[2500]))) as any).data.return_request.id)
+          const other = await delivered()
+          const expiredRow = await get(((await request(exchangeBody(other, await ringId(other.orderId), fx.variantByPrice[3000]))) as any).data.return_request.id)
+          payLink(paidRow.fee_link_id, 50000)
+          razorpay.links.get(expiredRow.fee_link_id)!.status = "expired"
+
+          // Fresh links are left alone.
+          await syncExchangePaymentsJob(getContainer())
+          expect((await get(paidRow.id)).status).toBe("pending_fee")
+
+          const pg = getContainer().resolve(ContainerRegistrationKeys.PG_CONNECTION) as any
+          await pg.raw("update return_request set updated_at = now() - interval '1 hour' where id in (?, ?)", [paidRow.id, expiredRow.id])
+          await syncExchangePaymentsJob(getContainer())
+          expect((await get(paidRow.id)).status).toBe("reverse_pickup_scheduled")
+          expect((await get(expiredRow.id)).status).toBe("rejected")
         })
       })
 

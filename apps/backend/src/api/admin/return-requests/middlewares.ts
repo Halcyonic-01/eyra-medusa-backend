@@ -19,6 +19,11 @@ export const returnRequestMiddlewares: MiddlewareRoute[] = [
     middlewares: [validatedBody(parseCreateReturnRequest)],
   },
   {
+    matcher: "/admin/return-requests/quote",
+    method: "POST",
+    middlewares: [validatedBody(parseCreateReturnRequest)],
+  },
+  {
     matcher: "/admin/return-requests/:id/approve",
     method: "POST",
     middlewares: [validatedBody(parseApproveReturnRequest)],

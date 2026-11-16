@@ -3,12 +3,11 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { RETURN_REQUEST_MODULE } from "../../modules/return-request"
 import { exchangePaymentDue } from "../../modules/return-request/constants"
 import { fromStoredItems } from "../../modules/return-request/items"
-import { createExchangeFeeLink } from "../../modules/return-request/payment-link"
+import { requestExchangePayment } from "../../modules/return-request/exchange-payment"
 import { bookReversePickup } from "../../modules/return-request/reverse-pickup"
 import type ReturnRequestModuleService from "../../modules/return-request/service"
 import { toNumber } from "../../modules/wallet/utils"
 import { postToStorefront } from "../../utils/storefront"
-import { sendWhatsapp } from "../../utils/whatsapp"
 
 type Address = {
   first_name?: string | null
@@ -47,8 +46,6 @@ const clean = (value: string | null | undefined) => (value ?? "").trim()
 export const startReturnFlowStep = createStep(
   "start-return-flow",
   async (input: { request_id: string }, { container }) => {
-    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
-    const query = container.resolve(ContainerRegistrationKeys.QUERY)
     const service: ReturnRequestModuleService = container.resolve(RETURN_REQUEST_MODULE)
 
     const [request] = await service.listReturnRequests({ id: input.request_id }, { take: 1 })
@@ -57,65 +54,15 @@ export const startReturnFlowStep = createStep(
       return new StepResponse<StartedReturnFlow>({ request_id: request.id, outcome: "manual_review" })
     }
 
-    const { data } = await query.graph({
-      entity: "order",
-      fields: [
-        "id",
-        "display_id",
-        "email",
-        "shipping_address.first_name",
-        "shipping_address.last_name",
-        "shipping_address.address_1",
-        "shipping_address.address_2",
-        "shipping_address.city",
-        "shipping_address.province",
-        "shipping_address.postal_code",
-        "shipping_address.phone",
-      ],
-      filters: { id: request.order_id },
-    })
-    const order = data[0] as unknown as OrderForPickup | undefined
-    if (!order) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Order was not found")
-    const address = order.shipping_address ?? {}
-    const fullName = [clean(address.first_name), clean(address.last_name)].filter(Boolean).join(" ")
-    const orderRef = `EYRA-${order.display_id}`
-
     if (request.type === "exchange" && exchangePaymentDue(toNumber(request.amount_due))) {
-      const origin = (() => {
-        try {
-          return new URL(process.env.STOREFRONT_REVALIDATE_URL ?? "").origin
-        } catch {
-          return undefined
-        }
-      })()
-      const result = await createExchangeFeeLink({
-        request_id: request.id,
-        order_id: order.id,
-        order_ref: orderRef,
-        amount: toNumber(request.amount_due),
-        customer: { name: fullName, email: order.email, phone: address.phone ?? null },
-        callback_url: origin ? `${origin}/orders/${order.id}` : undefined,
-      })
-      if (!result.ok) {
-        logger.error(`[exchange] could not make the payment link for ${request.id}: ${result.error}`)
+      const asked = await requestExchangePayment(container, request.id)
+      if (!asked.ok) {
         throw new MedusaError(
           MedusaError.Types.UNEXPECTED_STATE,
           "We could not start your exchange just now. Please try again in a few minutes.",
           "payment_link_failed"
         )
       }
-      await service.updateReturnRequests({
-        id: request.id,
-        status: "pending_fee",
-        fee_link_id: result.link.id,
-        fee_link_url: result.link.short_url,
-      })
-      await sendWhatsapp(logger, {
-        template: "exchange_payment_link",
-        phone: address.phone,
-        name: fullName,
-        params: { amount: toNumber(request.amount_due), link: result.link.short_url, order: orderRef },
-      })
       return new StepResponse<StartedReturnFlow>({ request_id: request.id, outcome: "payment_link_created" })
     }
 

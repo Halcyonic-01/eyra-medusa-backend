@@ -8,6 +8,7 @@ import {
   emitEventStep,
   releaseLockStep,
 } from "@medusajs/medusa/core-flows"
+import { closeExchangePaymentStep } from "./steps/close-exchange-payment"
 import { getPendingReturnRequestStep } from "./steps/get-pending-return-request"
 import { resolveReturnRequestStep } from "./steps/resolve-return-request"
 
@@ -18,7 +19,10 @@ export type RejectReturnRequestInput = {
   rejected_by?: string
 }
 
-/** Declines a return or exchange request and tells the customer why. */
+/**
+ * Declines a return or exchange request and tells the customer why. An exchange's
+ * unpaid payment link is cancelled, and a price difference already paid is refunded.
+ */
 export const rejectReturnRequestWorkflow = createWorkflow(
   "reject-return-request",
   function (input: RejectReturnRequestInput) {
@@ -39,6 +43,9 @@ export const rejectReturnRequestWorkflow = createWorkflow(
         resolved_by: data.input.rejected_by ?? null,
       }))
     )
+
+    // Still under the lock, so a payment arriving now waits and then sees the decline.
+    closeExchangePaymentStep(transform({ input }, (data) => ({ request_id: data.input.request_id })))
 
     releaseLockStep({ key: lockKey })
 

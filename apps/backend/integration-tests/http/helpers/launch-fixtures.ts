@@ -31,7 +31,7 @@ export type LaunchFixtures = {
 }
 
 /** Prices the tests need a single-line cart for. */
-export const PROBE_PRICES = [1000, 1499, 1500, 1600, 2000, 2999, 3000, 3001, 3500, 4000, 5000, 5001, 6000, 7000, 12000]
+export const PROBE_PRICES = [1000, 1499, 1500, 1600, 2000, 2500, 2999, 3000, 3001, 3500, 4000, 5000, 5001, 6000, 7000, 12000]
 
 /**
  * Everything checkout needs in an empty test database: a store, region,

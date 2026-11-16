@@ -9,6 +9,24 @@ import { createReturnRequestStep, type ReturnRequestType } from "./steps/create-
 import { startReturnFlowStep } from "./steps/start-return-flow"
 import { validateReturnRequestStep } from "./steps/validate-return-request"
 
+/** What a request needs to know about its order. */
+export const RETURN_ORDER_FIELDS = [
+  "id",
+  "display_id",
+  "customer_id",
+  "email",
+  "status",
+  "discount_total",
+  "metadata",
+  "items.id",
+  "items.title",
+  "items.variant_title",
+  "items.variant_sku",
+  "items.quantity",
+  "items.detail.quantity",
+  "items.unit_price",
+]
+
 export type CreateReturnRequestInput = {
   customer_id: string
   order_id: string
@@ -32,22 +50,7 @@ export const createReturnRequestWorkflow = createWorkflow(
   function (input: CreateReturnRequestInput) {
     const { data: orders } = useQueryGraphStep({
       entity: "order",
-      fields: [
-        "id",
-        "display_id",
-        "customer_id",
-        "email",
-        "status",
-        "discount_total",
-        "metadata",
-        "items.id",
-        "items.title",
-        "items.variant_title",
-        "items.variant_sku",
-        "items.quantity",
-        "items.detail.quantity",
-        "items.unit_price",
-      ],
+      fields: RETURN_ORDER_FIELDS,
       filters: { id: input.order_id },
     })
 
