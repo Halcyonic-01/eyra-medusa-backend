@@ -29,6 +29,11 @@ export const recordPriceSnapshotStep = createStep(
       throw new MedusaError(MedusaError.Types.NOT_ALLOWED, `We could not start the payment: ${built.message}`)
     }
     const service: PaymentSnapshotModuleService = container.resolve(PAYMENT_SNAPSHOT_MODULE)
+    // Earlier attempts stay on record (they can still be paid late) and are checked first by the late-payment sweep.
+    await service.updatePaymentPriceSnapshots({
+      selector: { cart_id: input.cart_id, superseded_at: null },
+      data: { superseded_at: new Date(), late_checked_at: null },
+    })
     const created = await service.createPaymentPriceSnapshots({ ...built.snapshot, lines: built.snapshot.lines as never })
     return new StepResponse(created, created.id)
   },

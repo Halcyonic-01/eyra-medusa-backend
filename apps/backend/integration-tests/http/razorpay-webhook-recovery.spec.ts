@@ -271,16 +271,17 @@ medusaIntegrationTestRunner({
         expect(victimState).toMatchObject({ completed: false, payments: 0 })
       })
 
-      it("a late payment for a replaced session is ignored, and the new session is untouched", async () => {
+      it("a late payment for a replaced session is not processed as another cart's; it is settled into its own cart's order", async () => {
         const first = await openPayment()
         const second = await flow.must(api.post(`/store/carts/${first.cartId}/razorpay-session`, {}, { headers: flow.headers }))
         expect(second.payment_session_id).not.toBe(first.sessionId)
         const late = razorpay.pay(first.razorpayOrderId)
 
         const res = await hook(late)
-        expect(res.data.reason).toBe("session_gone")
-        await wait(7000)
-        expect(await cartPayments(first.cartId)).toMatchObject({ completed: false, payments: 0 })
+        expect(res.data).toMatchObject({ reason: "session_gone", settling: true })
+        expect(await waitFor(async () => (await cartPayments(first.cartId)).completed)).toBe(true)
+        expect(await cartPayments(first.cartId)).toMatchObject({ payments: 1, captures: 1, refunds: 0 })
+        expect(razorpay.refunds).toHaveLength(0)
       })
 
       // ── Webhook first, storefront first, duplicates ──────────────────

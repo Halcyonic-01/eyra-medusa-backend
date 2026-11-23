@@ -7,6 +7,7 @@ import { storeCartMiddlewares } from "./store/carts/middlewares"
 import { paymentHookMiddlewares } from "./hooks/middlewares"
 import { redisGateMiddlewares } from "./redis-gate"
 import { cartLeftoverMiddlewares } from "./store/carts/leftover-guard"
+import { latePaymentMiddlewares } from "./store/carts/late-payment-guard"
 import { orderConfirmationMiddlewares } from "./admin/razorpay-confirmations/middlewares"
 import { reviewMiddlewares } from "./review-middlewares"
 
@@ -16,6 +17,8 @@ export default defineMiddlewares({
     ...redisGateMiddlewares,
     // Then, before a cart changes, give back what a crashed attempt on it used up.
     ...cartLeftoverMiddlewares,
+    // Then, before a cart completes, put a paid replaced Razorpay attempt back on it.
+    ...latePaymentMiddlewares,
     // Razorpay signs the exact bytes it sends, so the raw body is kept to check them against.
     {
       method: ["POST"],

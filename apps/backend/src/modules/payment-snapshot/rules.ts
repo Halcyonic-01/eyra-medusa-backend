@@ -111,7 +111,7 @@ export function snapshotLines(cart: CartLike): SnapshotLine[] {
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
-function sameLines(a: SnapshotLine[], b: SnapshotLine[]): boolean {
+export function sameLines(a: SnapshotLine[], b: SnapshotLine[]): boolean {
   if (a.length !== b.length) return false
   return a.every((line, index) => {
     const other = b[index]
