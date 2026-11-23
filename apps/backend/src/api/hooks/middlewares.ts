@@ -11,6 +11,7 @@ import {
   webhookTarget,
   withSessionId,
 } from "../../modules/payment-snapshot/webhook-guard"
+import { requestSettle } from "../../modules/payment-snapshot/late-payments"
 import { resolveWebhookSessionWorkflow } from "../../workflows/resolve-webhook-session"
 
 const RAZORPAY_HOOK = "razorpay_razorpay"
@@ -49,6 +50,14 @@ export async function guardPaymentWebhook(req: MedusaRequest, res: MedusaRespons
     input: { razorpay_order_id: target.razorpay_order_id },
   })
   if (result.session_id === null) {
+    if (result.reason !== "no_snapshot") {
+      // A replaced attempt was paid: the settle recovers it into the order or refunds it.
+      logger.warn(
+        `[razorpay-hook] ${target.event} for Razorpay order ${target.razorpay_order_id} is on a replaced attempt of cart ${result.cart_id}; settling it`
+      )
+      await requestSettle(req.scope, result.cart_id)
+      return res.status(200).json({ received: true, acted: false, reason: result.reason, settling: true })
+    }
     logger.warn(
       `[razorpay-hook] ${target.event} for Razorpay order ${target.razorpay_order_id} matches no payment session (${result.reason}); not processed here. The storefront webhook still completes known carts.`
     )

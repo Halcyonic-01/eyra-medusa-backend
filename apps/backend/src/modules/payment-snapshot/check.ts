@@ -6,8 +6,6 @@ import { fetchRazorpayOrderPayments } from "./razorpay-api"
 import {
   RAZORPAY_PROVIDER_ID,
   judgePaidSnapshot,
-  paidTowardsOrder,
-  sessionRazorpayOrderId,
   snapshotMatchesCart,
   type CartLike,
   type PaymentSnapshotRecord,
@@ -56,7 +54,7 @@ export async function loadCartPaymentState(container: MedusaContainer, cartId: s
 
 async function snapshotFor(container: MedusaContainer, sessionId: string): Promise<PaymentSnapshotRecord | null> {
   const service: PaymentSnapshotModuleService = container.resolve(PAYMENT_SNAPSHOT_MODULE)
-  const [snapshot] = await service.listPaymentPriceSnapshots({ payment_session_id: sessionId }, { take: 1 })
+  const [snapshot] = await service.listPaymentPriceSnapshots({ payment_session_id: sessionId, superseded_at: null }, { take: 1 })
   return (snapshot as unknown as PaymentSnapshotRecord) ?? null
 }
 
@@ -83,19 +81,4 @@ export async function checkPaidSnapshot(container: MedusaContainer, cartId: stri
     razorpayOrder: order,
     razorpayPayments: payments,
   })
-}
-
-/**
- * Whether money has already been taken for any Razorpay session on the cart.
- * Opening a new payment would drop that session, so the paid one could never
- * become an order. Throws RazorpayUnavailableError when Razorpay cannot be asked.
- */
-export async function hasPaidRazorpaySession(container: MedusaContainer, state: CartPaymentState): Promise<boolean> {
-  for (const session of state.razorpaySessions) {
-    const razorpayOrderId = sessionRazorpayOrderId(session)
-    if (!razorpayOrderId) continue
-    const { order, payments } = await fetchRazorpayOrderPayments(razorpayOrderId)
-    if (order && paidTowardsOrder(order, payments) > 0) return true
-  }
-  return false
 }

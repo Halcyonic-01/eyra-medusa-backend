@@ -52,7 +52,7 @@ async function validateSnapshotAmount(cartId: string, container: MedusaContainer
   const session = state?.session
   if (!state || !session || session.provider_id !== RAZORPAY_PROVIDER_ID) return
   const service: PaymentSnapshotModuleService = container.resolve(PAYMENT_SNAPSHOT_MODULE)
-  const [snapshot] = await service.listPaymentPriceSnapshots({ payment_session_id: session.id }, { take: 1 })
+  const [snapshot] = await service.listPaymentPriceSnapshots({ payment_session_id: session.id, superseded_at: null }, { take: 1 })
   if (!snapshot) return
   if (toPaise(session.amount) !== snapshot.amount_paise || toPaise(state.cart.total) !== snapshot.amount_paise) {
     throw new MedusaError(

@@ -22,6 +22,17 @@ export type FakePayment = {
   status: "captured" | "authorized" | "failed" | "refunded"
 }
 
+export type FakeRefund = {
+  id: string
+  entity: "refund"
+  payment_id: string
+  amount: number
+  receipt: string | null
+  notes: Record<string, unknown>
+  status: string
+  created_at: number
+}
+
 const REAL_HOST = "https://api.razorpay.com"
 
 /**
@@ -32,8 +43,9 @@ const REAL_HOST = "https://api.razorpay.com"
 export async function startFakeRazorpay(port: number) {
   const orders = new Map<string, FakeOrder>()
   const payments = new Map<string, FakePayment[]>()
-  const refunds: { payment_id: string; amount: number }[] = []
-  const state = { down: false, seq: 0 }
+  const refunds: FakeRefund[] = []
+  /** refund: "ok", "refuse" (a clear 400) or "lost" (made, but the answer never arrives) */
+  const state = { down: false, seq: 0, refund: "ok" as "ok" | "refuse" | "lost" }
 
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
@@ -73,11 +85,34 @@ export async function startFakeRazorpay(port: number) {
         return json(200, order)
       }
       if ((match = path.match(/^\/v1\/payments\/([^/]+)\/refund$/)) && req.method === "POST") {
-        refunds.push({ payment_id: match[1], amount: Number(body.amount) })
-        for (const list of payments.values()) {
-          for (const payment of list) if (payment.id === match[1]) payment.status = "refunded"
+        if (state.refund === "refuse") return json(400, { error: { code: "BAD_REQUEST_ERROR", description: "refund refused" } })
+        const paymentId = match[1]
+        const refund: FakeRefund = {
+          id: `rfnd_FAKE${refunds.length + 1}`,
+          entity: "refund",
+          payment_id: paymentId,
+          amount: Number(body.amount),
+          receipt: body.receipt ?? null,
+          notes: body.notes ?? {},
+          status: "processed",
+          created_at: Math.floor(Date.now() / 1000),
         }
-        return json(200, { id: `rfnd_FAKE${refunds.length}`, entity: "refund", payment_id: match[1], amount: body.amount })
+        refunds.push(refund)
+        for (const list of payments.values()) {
+          for (const payment of list) if (payment.id === paymentId) payment.status = "refunded"
+        }
+        if (state.refund === "lost") return json(504, { error: { code: "GATEWAY_ERROR" } })
+        return json(200, refund)
+      }
+      if ((match = path.match(/^\/v1\/payments\/([^/]+)\/refunds$/)) && req.method === "GET") {
+        const items = refunds.filter((r) => r.payment_id === match![1])
+        return json(200, { entity: "collection", count: items.length, items })
+      }
+      if ((match = path.match(/^\/v1\/payments\/([^/]+)$/)) && req.method === "GET") {
+        const payment = [...payments.values()].flat().find((p) => p.id === match![1])
+        if (!payment) return json(404, { error: { code: "BAD_REQUEST_ERROR" } })
+        const refunded = refunds.filter((r) => r.payment_id === payment.id).reduce((n, r) => n + r.amount, 0)
+        return json(200, { ...payment, amount_refunded: refunded })
       }
       return json(404, { error: { code: "NOT_FOUND", path } })
     })

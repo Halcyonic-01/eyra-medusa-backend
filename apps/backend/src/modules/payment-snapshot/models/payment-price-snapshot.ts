@@ -7,8 +7,9 @@ import { model } from "@medusajs/framework/utils"
  * prices, so a customer who pays it gets the order at that price even if a sale
  * ends while they are paying.
  *
- * One row per payment session; a new attempt makes a new session and a new row.
- * Amounts are whole paise.
+ * One row per attempt; a new attempt makes a new session and a new row. Rows
+ * are kept after Medusa deletes the session they were opened with, so a late
+ * payment on a replaced attempt can still be found. Amounts are whole paise.
  */
 export const PaymentPriceSnapshot = model
   .define("payment_price_snapshot", {
@@ -25,9 +26,13 @@ export const PaymentPriceSnapshot = model
     razorpay_amount_paise: model.number(),
     /** [{ id, variant_id, quantity, unit_price_paise }], sorted by id. */
     lines: model.json(),
+    /** A newer attempt replaced this one; only the current attempt holds its session id. */
+    superseded_at: model.dateTime().nullable(),
+    /** When the late-payment sweep last asked Razorpay about this attempt. */
+    late_checked_at: model.dateTime().nullable(),
   })
   .indexes([
     { on: ["cart_id"] },
-    { on: ["payment_session_id"], unique: true, where: "deleted_at IS NULL" },
+    { on: ["payment_session_id"], unique: true, where: "deleted_at IS NULL AND superseded_at IS NULL" },
     { on: ["razorpay_order_id"], unique: true, where: "deleted_at IS NULL" },
   ])

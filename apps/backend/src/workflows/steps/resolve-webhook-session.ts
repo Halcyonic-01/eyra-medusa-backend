@@ -6,7 +6,8 @@ import type PaymentSnapshotModuleService from "../../modules/payment-snapshot/se
 
 export type WebhookSession =
   | { session_id: string; cart_id: string }
-  | { session_id: null; reason: "no_snapshot" | "session_gone" | "session_mismatch" }
+  | { session_id: null; reason: "no_snapshot" }
+  | { session_id: null; reason: "session_gone" | "session_mismatch"; cart_id: string }
 
 /**
  * Finds the Medusa payment session a Razorpay order belongs to, from the
@@ -27,13 +28,13 @@ export const resolveWebhookSessionStep = createStep(
       filters: { id: snapshot.payment_session_id },
     })
     const session = data[0] as unknown as (SessionLike & { payment_collection_id?: string }) | undefined
-    if (!session) return new StepResponse<WebhookSession>({ session_id: null, reason: "session_gone" })
+    if (!session) return new StepResponse<WebhookSession>({ session_id: null, reason: "session_gone", cart_id: snapshot.cart_id })
     if (
       session.provider_id !== RAZORPAY_PROVIDER_ID ||
       session.payment_collection_id !== snapshot.payment_collection_id ||
       sessionRazorpayOrderId(session) !== input.razorpay_order_id
     ) {
-      return new StepResponse<WebhookSession>({ session_id: null, reason: "session_mismatch" })
+      return new StepResponse<WebhookSession>({ session_id: null, reason: "session_mismatch", cart_id: snapshot.cart_id })
     }
     return new StepResponse<WebhookSession>({ session_id: session.id, cart_id: snapshot.cart_id })
   }
