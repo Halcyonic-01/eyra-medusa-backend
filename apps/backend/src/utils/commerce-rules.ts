@@ -1,3 +1,5 @@
+import { COD_PROVIDER_ID, RAZORPAY_PROVIDER_ID, isPrepaidProvider } from "../modules/payment-snapshot/gateways/ids"
+
 /**
  * The launch offers and checkout charges, in one place.
  *
@@ -31,8 +33,7 @@ export const TOTE_MIN_SUBTOTAL = 1499
 export const PREPAID_OPTION_CODE = "eyra-prepaid"
 export const COD_OPTION_CODE = "eyra-cod"
 
-export const RAZORPAY_PROVIDER_ID = "pp_razorpay_razorpay"
-export const COD_PROVIDER_ID = "pp_system_default"
+export { COD_PROVIDER_ID, RAZORPAY_PROVIDER_ID }
 
 type Bound = { value: number; inclusive: boolean }
 
@@ -158,7 +159,7 @@ export type PaymentMode = "prepaid" | "cod"
  * collected on delivery.
  */
 export function paymentModeFor(providerIds: readonly string[], amountDue: number): PaymentMode | null {
-  if (providerIds.includes(RAZORPAY_PROVIDER_ID)) return "prepaid"
+  if (providerIds.some((id) => isPrepaidProvider(id))) return "prepaid"
   if (providerIds.includes(COD_PROVIDER_ID)) return amountDue > 0 ? "cod" : "prepaid"
   return null
 }

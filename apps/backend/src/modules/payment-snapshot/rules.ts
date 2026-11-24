@@ -1,21 +1,24 @@
 import { toNumber } from "../../utils/commerce-rules"
+import { RAZORPAY_PROVIDER_ID } from "./gateways/ids"
+import { sessionRazorpayAmount, sessionRazorpayOrderId, type RazorpayOrder, type RazorpayPayment } from "./gateways/razorpay-shape"
+import { paidTowardsAttempt, type GatewayAttempt } from "./gateways/types"
 
 /**
- * Rules for honouring the price a customer agreed to when they opened a
- * Razorpay payment. Pure, so every case is unit tested.
+ * Rules for honouring the price a customer agreed to when they opened an
+ * online payment attempt. Pure, so every case is unit tested. Nothing here
+ * knows a provider: the caller passes the attempt a session pays (its ref and
+ * amount, from the provider's gateway) and what the provider says was paid.
  *
  * The idea: a snapshot is only written by the backend, right after the cart was
- * repriced to today's prices. If Razorpay later confirms that exact order was
- * paid in full, and the cart is still exactly what was snapshotted, the order is
- * placed at the snapshotted price even if a sale ended in between. Anything else
- * (no snapshot, a new attempt, a changed cart, a short or failed payment) falls
- * back to the normal rule: lines must be at today's price.
+ * repriced to today's prices. If the provider later confirms that exact attempt
+ * was paid in full, and the cart is still exactly what was snapshotted, the
+ * order is placed at the snapshotted price even if a sale ended in between.
+ * Anything else (no snapshot, a new attempt, a changed cart, a short or failed
+ * payment) falls back to the normal rule: lines must be at today's price.
  */
 
-export const RAZORPAY_PROVIDER_ID = "pp_razorpay_razorpay"
-
-/** Razorpay payment states that mean the money was taken. */
-const PAID_STATES = ["captured", "authorized"]
+export { RAZORPAY_PROVIDER_ID, sessionRazorpayAmount, sessionRazorpayOrderId }
+export type { RazorpayOrder, RazorpayPayment }
 
 export type SnapshotLine = {
   id: string
@@ -24,13 +27,21 @@ export type SnapshotLine = {
   unit_price_paise: number
 }
 
+/**
+ * One attempt as recorded. `provider_ref` and `provider_amount_paise` are the
+ * attempt; the razorpay_* columns are the same values on Razorpay rows, kept
+ * for rows written before the provider columns existed.
+ */
 export type PaymentSnapshotRecord = {
   cart_id: string
   payment_session_id: string
-  razorpay_order_id: string
+  provider_id: string
+  provider_ref?: string | null
+  provider_amount_paise?: number | null
+  razorpay_order_id?: string | null
+  razorpay_amount_paise?: number | null
   currency_code: string
   amount_paise: number
-  razorpay_amount_paise: number
   lines: SnapshotLine[]
 }
 
@@ -57,21 +68,8 @@ export type SessionLike = {
   data?: Record<string, unknown> | null
 }
 
-export type RazorpayOrder = {
-  id: string
-  amount: number
-  currency: string
-  status?: string
-  amount_paid?: number
-}
-
-export type RazorpayPayment = {
-  id: string
-  order_id: string | null
-  amount: number
-  currency: string
-  status: string
-}
+/** The attempt a session pays, as its provider's gateway reads it from the session. */
+export type SessionBinding = { ref: string | null; attempt_amount_paise: number }
 
 export type SnapshotVerdict =
   | { honoured: true }
@@ -86,16 +84,14 @@ export function toPaise(value: unknown): number {
   return Number.isFinite(rupees) ? Math.round(rupees * 100) : Number.NaN
 }
 
-/** The Razorpay order id the plugin keeps on a payment session. */
-export function sessionRazorpayOrderId(session: SessionLike | null | undefined): string | null {
-  const order = (session?.data as { razorpayOrder?: { id?: unknown } } | null | undefined)?.razorpayOrder
-  return typeof order?.id === "string" ? order.id : null
+/** The attempt a snapshot records. Rows from before the provider columns only have the Razorpay ones. */
+export function attemptRef(snapshot: Pick<PaymentSnapshotRecord, "provider_ref" | "razorpay_order_id">): string {
+  return snapshot.provider_ref ?? snapshot.razorpay_order_id ?? ""
 }
 
-/** The Razorpay order amount the plugin keeps on a payment session, in paise. */
-export function sessionRazorpayAmount(session: SessionLike | null | undefined): number {
-  const order = (session?.data as { razorpayOrder?: { amount?: unknown } } | null | undefined)?.razorpayOrder
-  return Number(order?.amount)
+/** What the recorded attempt asks for, in paise. */
+export function attemptAmountPaise(snapshot: Pick<PaymentSnapshotRecord, "provider_amount_paise" | "razorpay_amount_paise">): number {
+  return Number(snapshot.provider_amount_paise ?? snapshot.razorpay_amount_paise ?? Number.NaN)
 }
 
 /** Every line on the cart, as the snapshot stores it: sorted, in paise. */
@@ -125,75 +121,70 @@ export function sameLines(a: SnapshotLine[], b: SnapshotLine[]): boolean {
 }
 
 /**
- * Builds the snapshot for a freshly opened Razorpay session, or explains why it
- * cannot be trusted. The session amount, the cart total and the Razorpay order
- * must all agree to the paisa, or no snapshot is written.
+ * Builds the snapshot for a freshly opened attempt, or explains why it cannot
+ * be trusted. The session amount, the cart total and the provider's attempt
+ * must all agree to the paisa, or no snapshot is written. `binding` is null
+ * when the session's provider has no gateway (not an online payment).
  */
 export function buildSnapshot(
   cart: CartLike,
   session: SessionLike,
-  paymentCollectionId: string
-): { ok: true; snapshot: PaymentSnapshotRecord & { payment_collection_id: string; provider_id: string } } | { ok: false; message: string } {
-  const razorpayOrderId = sessionRazorpayOrderId(session)
-  if (session.provider_id !== RAZORPAY_PROVIDER_ID || !razorpayOrderId) {
-    return { ok: false, message: "The payment session is not a Razorpay payment." }
+  paymentCollectionId: string,
+  binding: SessionBinding | null
+): { ok: true; snapshot: PaymentSnapshotRecord & { payment_collection_id: string; provider_ref: string; provider_amount_paise: number } } | { ok: false; message: string } {
+  if (!binding?.ref || !session.provider_id) {
+    return { ok: false, message: "The payment session is not an online payment attempt." }
   }
   const amount = toPaise(session.amount)
   const total = toPaise(cart.total)
-  const razorpayAmount = sessionRazorpayAmount(session)
-  if (!Number.isFinite(amount) || amount <= 0 || amount !== total || razorpayAmount !== amount) {
+  const attemptAmount = binding.attempt_amount_paise
+  if (!Number.isFinite(amount) || amount <= 0 || amount !== total || attemptAmount !== amount) {
     return {
       ok: false,
-      message: `The payment amount does not match the cart (cart ${total}, session ${amount}, Razorpay ${razorpayAmount} paise).`,
+      message: `The payment amount does not match the cart (cart ${total}, session ${amount}, provider ${attemptAmount} paise).`,
     }
   }
   const currency = (session.currency_code ?? cart.currency_code ?? "").toLowerCase()
   if (!currency || currency !== (cart.currency_code ?? "").toLowerCase()) {
     return { ok: false, message: "The payment currency does not match the cart." }
   }
+  const razorpay = session.provider_id === RAZORPAY_PROVIDER_ID
   return {
     ok: true,
     snapshot: {
       cart_id: cart.id,
       payment_collection_id: paymentCollectionId,
       payment_session_id: session.id,
-      provider_id: RAZORPAY_PROVIDER_ID,
-      razorpay_order_id: razorpayOrderId,
+      provider_id: session.provider_id,
+      provider_ref: binding.ref,
+      provider_amount_paise: attemptAmount,
+      // Still written for Razorpay, so a rollback to code that reads only these keeps working.
+      razorpay_order_id: razorpay ? binding.ref : null,
+      razorpay_amount_paise: razorpay ? attemptAmount : null,
       currency_code: currency,
       amount_paise: amount,
-      razorpay_amount_paise: razorpayAmount,
       lines: snapshotLines(cart),
     },
   }
 }
 
-/** What Razorpay itself says was paid towards the order, in paise. Only verified Razorpay data counts. */
-export function paidTowardsOrder(order: RazorpayOrder, payments: RazorpayPayment[]): number {
-  return payments
-    .filter(
-      (payment) =>
-        payment.order_id === order.id &&
-        PAID_STATES.includes(payment.status) &&
-        payment.currency.toUpperCase() === order.currency.toUpperCase()
-    )
-    .reduce((sum, payment) => sum + Number(payment.amount), 0)
-}
-
 /**
  * Whether the cart can still be checked against the snapshot, before asking
- * Razorpay anything: same session, same Razorpay order, same lines, same amount.
+ * the provider anything: same session, same attempt, same lines, same amount.
  */
 export function snapshotMatchesCart(
   snapshot: PaymentSnapshotRecord | null | undefined,
   cart: CartLike,
-  session: SessionLike | null | undefined
+  session: SessionLike | null | undefined,
+  sessionRef: string | null
 ): SnapshotVerdict {
   if (!snapshot) return { honoured: false, reason: "no_snapshot" }
   if (
     !session ||
-    session.provider_id !== RAZORPAY_PROVIDER_ID ||
+    session.provider_id !== snapshot.provider_id ||
     session.id !== snapshot.payment_session_id ||
-    sessionRazorpayOrderId(session) !== snapshot.razorpay_order_id ||
+    !sessionRef ||
+    sessionRef !== attemptRef(snapshot) ||
     snapshot.cart_id !== cart.id
   ) {
     return { honoured: false, reason: "session_changed" }
@@ -212,29 +203,29 @@ export function snapshotMatchesCart(
 }
 
 /**
- * The full decision: the cart still matches its snapshot, and Razorpay confirms
- * the snapshotted order for the snapshotted amount was paid in full.
+ * The full decision: the cart still matches its snapshot, and the provider
+ * confirms the snapshotted attempt for the snapshotted amount was paid in full.
  */
 export function judgePaidSnapshot(input: {
   snapshot: PaymentSnapshotRecord | null | undefined
   cart: CartLike
   session: SessionLike | null | undefined
-  razorpayOrder: RazorpayOrder | null
-  razorpayPayments: RazorpayPayment[]
+  sessionRef: string | null
+  attempt: GatewayAttempt | null
 }): SnapshotVerdict {
-  const local = snapshotMatchesCart(input.snapshot, input.cart, input.session)
+  const local = snapshotMatchesCart(input.snapshot, input.cart, input.session, input.sessionRef)
   if (!local.honoured) return local
   const snapshot = input.snapshot as PaymentSnapshotRecord
-  const order = input.razorpayOrder
+  const attempt = input.attempt
   if (
-    !order ||
-    order.id !== snapshot.razorpay_order_id ||
-    Number(order.amount) !== snapshot.razorpay_amount_paise ||
-    order.currency.toLowerCase() !== snapshot.currency_code
+    !attempt ||
+    attempt.ref !== attemptRef(snapshot) ||
+    attempt.amount_paise !== attemptAmountPaise(snapshot) ||
+    attempt.currency.toLowerCase() !== snapshot.currency_code
   ) {
     return { honoured: false, reason: "amount_mismatch" }
   }
-  if (paidTowardsOrder(order, input.razorpayPayments) !== Number(order.amount)) {
+  if (paidTowardsAttempt(attempt) !== attempt.amount_paise) {
     return { honoured: false, reason: "not_paid" }
   }
   return { honoured: true }

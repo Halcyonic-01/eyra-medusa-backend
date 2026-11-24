@@ -1,5 +1,6 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import type { ShipmentDetails } from "../../modules/order-dispatch/transitions"
+import { isPrepaidProvider } from "../../modules/payment-snapshot/gateways/ids"
 import { isToteLine } from "../../utils/commerce-rules"
 import { shipmentItemType } from "../../utils/product-type"
 
@@ -204,7 +205,7 @@ export function planShipment(order: OrderRecord | undefined): ShipmentPlan {
   const providers = (order.payment_collections ?? []).flatMap((collection) =>
     (collection.payments ?? []).map((payment) => payment.provider_id ?? "")
   )
-  const paidOnline = providers.some((id) => id.includes("razorpay"))
+  const paidOnline = providers.some((id) => isPrepaidProvider(id))
 
   // A replacement sent for an exchange was paid for by the item sent back and the
   // exchange fee, so the courier collects nothing, whatever the order's own total is.

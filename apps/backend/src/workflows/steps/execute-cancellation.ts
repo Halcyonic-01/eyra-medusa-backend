@@ -149,10 +149,10 @@ export const executeCancellationStep = createStep(
 
       if (planned.method === "original") {
         // 2a. Send the refund first; only then cancel.
-        const refund = await getRefundGateway().refund({
+        const refund = await getRefundGateway(context.online_provider_id ?? undefined).refund({
           order_id: orderId,
-          razorpay_payment_id: context.razorpay_payment_id,
-          razorpay_order_id: context.razorpay_order_id,
+          payment_ref: context.payment_ref ?? context.razorpay_payment_id,
+          attempt_ref: context.attempt_ref ?? context.razorpay_order_id,
           amount: planned.refund_amount,
           fee: planned.fee,
           cancellation_id: cancellation.id,

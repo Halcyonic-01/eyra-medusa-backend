@@ -1,8 +1,11 @@
+import { RAZORPAY_PROVIDER_ID } from "../payment-snapshot/gateways/ids"
+
 /**
- * How a refund to the customer's original payment method is made. Behind a
- * small interface so the cancellation logic can be exercised without moving
- * real money: REFUND_GATEWAY=fake (or fake_fail, fake_unverified,
- * fake_ambiguous) swaps in a stand-in, for tests only.
+ * How a refund to the customer's original payment method is made, one
+ * implementation per payment provider (Razorpay here; others register theirs).
+ * Behind a small interface so the cancellation logic can be exercised without
+ * moving real money: REFUND_GATEWAY=fake (or fake_fail, fake_unverified,
+ * fake_ambiguous) swaps in a stand-in for every provider, for tests only.
  *
  * The refund goes straight to Razorpay, tagged with the cancellation it belongs
  * to, rather than through Medusa's Razorpay plugin: the plugin reports success
@@ -12,10 +15,10 @@
 
 export type RefundRequest = {
   order_id: string
-  /** Razorpay's payment id, when the order recorded it. */
-  razorpay_payment_id: string | null
-  /** Razorpay's order id, used to find the payment when its id was not recorded. */
-  razorpay_order_id: string | null
+  /** The provider's payment id (Razorpay pay_...), when the order recorded it. */
+  payment_ref: string | null
+  /** The provider's attempt (Razorpay order_...), used to find the payment when its id was not recorded. */
+  attempt_ref: string | null
   amount: number
   fee: number
   cancellation_id: string
@@ -32,8 +35,8 @@ export type PaymentRefundState =
   | { status: "unknown" }
 
 export interface RefundGateway {
-  /** How much of the payment Razorpay has refunded, in rupees. Never throws. */
-  paymentRefundState(razorpayPaymentId: string | null, razorpayOrderId: string | null): Promise<PaymentRefundState>
+  /** How much of the payment the provider has refunded, in rupees. Never throws. */
+  paymentRefundState(paymentRef: string | null, attemptRef: string | null): Promise<PaymentRefundState>
   /**
    * Refunds once per cancellation, however often it is called: a refund that
    * already exists for the cancellation is returned instead of sending another.
@@ -195,7 +198,7 @@ async function refundAtRazorpay(request: RefundRequest): Promise<RefundResult> {
   if (!auth) {
     return { ok: false, error: "Razorpay keys are not set on the backend", may_have_moved_money: false }
   }
-  const paymentId = request.razorpay_payment_id ?? (await paymentForOrder(auth, request.razorpay_order_id))
+  const paymentId = request.payment_ref ?? (await paymentForOrder(auth, request.attempt_ref))
   if (!paymentId) {
     return { ok: false, error: "The Razorpay payment for this order could not be found", may_have_moved_money: false }
   }
@@ -244,7 +247,25 @@ function fakeGateway(mode: string): RefundGateway {
   }
 }
 
-export function getRefundGateway(): RefundGateway {
+const razorpayRefunds: RefundGateway = { refund: refundAtRazorpay, paymentRefundState: paymentState }
+const providers = new Map<string, RefundGateway>([[RAZORPAY_PROVIDER_ID, razorpayRefunds]])
+
+/** Adds the refund implementation of another payment provider. */
+export function registerRefundGateway(providerId: string, gateway: RefundGateway) {
+  providers.set(providerId, gateway)
+}
+
+/** Answers without refunding, for a provider no implementation was registered for. */
+function unsupported(providerId: string): RefundGateway {
+  return {
+    paymentRefundState: async () => ({ status: "unknown" }),
+    refund: async () => ({ ok: false, error: `No refunds are set up for payment provider ${providerId}`, may_have_moved_money: false }),
+  }
+}
+
+/** The refunds of a payment provider; Razorpay when none is given, which is every order before other providers. */
+export function getRefundGateway(providerId: string = RAZORPAY_PROVIDER_ID): RefundGateway {
   const mode = (process.env.REFUND_GATEWAY ?? "").trim().toLowerCase()
-  return mode.startsWith("fake") ? fakeGateway(mode) : { refund: refundAtRazorpay, paymentRefundState: paymentState }
+  if (mode.startsWith("fake")) return fakeGateway(mode)
+  return providers.get(providerId) ?? unsupported(providerId)
 }

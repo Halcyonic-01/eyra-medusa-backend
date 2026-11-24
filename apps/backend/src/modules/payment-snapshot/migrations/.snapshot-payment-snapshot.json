@@ -33,13 +33,41 @@
           "nullable": false,
           "mappedType": "text"
         },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "default": "'pp_razorpay_razorpay'",
+          "mappedType": "text"
+        },
+        "provider_ref": {
+          "name": "provider_ref",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "provider_payment_ref": {
+          "name": "provider_payment_ref",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
         "razorpay_order_id": {
           "name": "razorpay_order_id",
           "type": "text",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "mappedType": "text"
         },
         "razorpay_payment_id": {
@@ -48,7 +76,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "mappedType": "text"
         },
         "amount_paise": {
@@ -214,6 +242,15 @@
           "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_late_razorpay_payment_razorpay_payment_id_unique\" ON \"late_razorpay_payment\" (\"razorpay_payment_id\") WHERE deleted_at IS NULL"
         },
         {
+          "keyName": "IDX_late_razorpay_payment_provider_id_provider_payment_ref_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_late_razorpay_payment_provider_id_provider_payment_ref_unique\" ON \"late_razorpay_payment\" (\"provider_id\", \"provider_payment_ref\") WHERE deleted_at IS NULL AND provider_payment_ref IS NOT NULL"
+        },
+        {
           "keyName": "IDX_late_razorpay_payment_status",
           "columnNames": [],
           "composite": false,
@@ -284,14 +321,41 @@
           "nullable": false,
           "mappedType": "text"
         },
+        "provider_ref": {
+          "name": "provider_ref",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
+        "provider_amount_paise": {
+          "name": "provider_amount_paise",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "integer"
+        },
         "razorpay_order_id": {
           "name": "razorpay_order_id",
           "type": "text",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "mappedType": "text"
+        },
+        "razorpay_amount_paise": {
+          "name": "razorpay_amount_paise",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "integer"
         },
         "currency_code": {
           "name": "currency_code",
@@ -304,15 +368,6 @@
         },
         "amount_paise": {
           "name": "amount_paise",
-          "type": "integer",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": false,
-          "mappedType": "integer"
-        },
-        "razorpay_amount_paise": {
-          "name": "razorpay_amount_paise",
           "type": "integer",
           "unsigned": false,
           "autoincrement": false,
@@ -420,6 +475,15 @@
           "primary": false,
           "unique": false,
           "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_payment_price_snapshot_razorpay_order_id_unique\" ON \"payment_price_snapshot\" (\"razorpay_order_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_payment_price_snapshot_provider_id_provider_ref_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_payment_price_snapshot_provider_id_provider_ref_unique\" ON \"payment_price_snapshot\" (\"provider_id\", \"provider_ref\") WHERE deleted_at IS NULL AND provider_ref IS NOT NULL"
         },
         {
           "keyName": "payment_price_snapshot_pkey",

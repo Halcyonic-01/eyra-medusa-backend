@@ -1,9 +1,9 @@
 import { model } from "@medusajs/framework/utils"
 
 /**
- * A Razorpay payment taken on an attempt that is no longer the cart's current
- * one, and what was done about it. One row per Razorpay payment, so the same
- * payment is never acted on twice.
+ * A payment taken on an online attempt that is no longer the cart's current
+ * one, and what was done about it. One row per provider payment, so the same
+ * payment is never acted on twice. (The table name predates other providers.)
  *
  * `status`:
  * - recovered:    the attempt became the cart's order
@@ -16,8 +16,13 @@ export const LateRazorpayPayment = model
     id: model.id({ prefix: "lrp" }).primaryKey(),
     cart_id: model.text(),
     snapshot_id: model.text(),
-    razorpay_order_id: model.text(),
-    razorpay_payment_id: model.text(),
+    provider_id: model.text().default("pp_razorpay_razorpay"),
+    /** The provider's attempt and payment. Null only on rows written before these columns. */
+    provider_ref: model.text().nullable(),
+    provider_payment_ref: model.text().nullable(),
+    /** Same values on Razorpay rows only, kept for older rows and rollback. */
+    razorpay_order_id: model.text().nullable(),
+    razorpay_payment_id: model.text().nullable(),
     amount_paise: model.number(),
     currency_code: model.text(),
     status: model.enum(["recovered", "refunding", "refunded", "needs_review"]),
@@ -33,5 +38,6 @@ export const LateRazorpayPayment = model
   .indexes([
     { on: ["cart_id"] },
     { on: ["razorpay_payment_id"], unique: true, where: "deleted_at IS NULL" },
+    { on: ["provider_id", "provider_payment_ref"], unique: true, where: "deleted_at IS NULL AND provider_payment_ref IS NOT NULL" },
     { on: ["status"] },
   ])

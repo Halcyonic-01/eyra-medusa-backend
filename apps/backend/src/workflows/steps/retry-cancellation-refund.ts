@@ -94,10 +94,10 @@ export const retryCancellationRefundStep = createStep(
     }
 
     if (record.refund_method === "original" && record.refund_status !== "initiated") {
-      const refund = await getRefundGateway().refund({
+      const refund = await getRefundGateway(context.online_provider_id ?? undefined).refund({
         order_id: input.order_id,
-        razorpay_payment_id: context.razorpay_payment_id,
-        razorpay_order_id: context.razorpay_order_id,
+        payment_ref: context.payment_ref ?? context.razorpay_payment_id,
+        attempt_ref: context.attempt_ref ?? context.razorpay_order_id,
         amount: refundAmount,
         fee: toNumber(record.fee),
         cancellation_id: record.id,

@@ -2,16 +2,17 @@ import { MedusaError } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { PAYMENT_SNAPSHOT_MODULE } from "../../modules/payment-snapshot"
 import { loadCartPaymentState } from "../../modules/payment-snapshot/check"
-import { buildSnapshot, RAZORPAY_PROVIDER_ID } from "../../modules/payment-snapshot/rules"
+import { sessionAttempt } from "../../modules/payment-snapshot/gateways"
+import { buildSnapshot } from "../../modules/payment-snapshot/rules"
 import type PaymentSnapshotModuleService from "../../modules/payment-snapshot/service"
 import { stalePriceMessage, type StalePriceLine } from "../../utils/stale-prices"
 
 export type RecordPriceSnapshotInput = { cart_id: string; stale: StalePriceLine[] }
 
 /**
- * Records what the cart costs for the Razorpay payment just opened. Refuses if
- * any line is not at today's price, or if the cart, the session and the
- * Razorpay order disagree on the amount. Removed again if the workflow fails.
+ * Records what the cart costs for the online payment attempt just opened.
+ * Refuses if any line is not at today's price, or if the cart, the session and
+ * the provider's attempt disagree on the amount. Removed again if the workflow fails.
  */
 export const recordPriceSnapshotStep = createStep(
   "record-price-snapshot",
@@ -20,11 +21,15 @@ export const recordPriceSnapshotStep = createStep(
       throw new MedusaError(MedusaError.Types.NOT_ALLOWED, stalePriceMessage(input.stale))
     }
     const state = await loadCartPaymentState(container, input.cart_id)
-    const session = state?.razorpaySessions.find((s) => s.status === "pending") ?? state?.razorpaySessions[0]
-    if (!state || !session || session.provider_id !== RAZORPAY_PROVIDER_ID || !state.cart.payment_collection?.id) {
-      throw new MedusaError(MedusaError.Types.UNEXPECTED_STATE, "The Razorpay payment could not be opened.")
+    const session = state?.prepaidSessions.find((s) => s.status === "pending") ?? state?.prepaidSessions[0]
+    const { gateway, ref } = sessionAttempt(session)
+    if (!state || !session || !gateway || !state.cart.payment_collection?.id) {
+      throw new MedusaError(MedusaError.Types.UNEXPECTED_STATE, "The online payment could not be opened.")
     }
-    const built = buildSnapshot(state.cart, session, state.cart.payment_collection.id)
+    const built = buildSnapshot(state.cart, session, state.cart.payment_collection.id, {
+      ref,
+      attempt_amount_paise: gateway.sessionAttemptAmount(session),
+    })
     if (!built.ok) {
       throw new MedusaError(MedusaError.Types.NOT_ALLOWED, `We could not start the payment: ${built.message}`)
     }

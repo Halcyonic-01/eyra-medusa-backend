@@ -1,10 +1,8 @@
 import { ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { PAYMENT_SNAPSHOT_MODULE } from "../../modules/payment-snapshot"
-import { checkPaidSnapshot, loadCartPaymentState } from "../../modules/payment-snapshot/check"
-import { RazorpayUnavailableError } from "../../modules/payment-snapshot/razorpay-api"
-import { RAZORPAY_PROVIDER_ID, toPaise } from "../../modules/payment-snapshot/rules"
-import type PaymentSnapshotModuleService from "../../modules/payment-snapshot/service"
+import { checkPaidSnapshot, loadCartPaymentState, snapshotFor } from "../../modules/payment-snapshot/check"
+import { GatewayUnavailableError, getGateway } from "../../modules/payment-snapshot/gateways"
+import { toPaise } from "../../modules/payment-snapshot/rules"
 import { stalePriceMessage } from "../../utils/stale-prices"
 import { findStaleCartPricesWorkflow } from "../find-stale-cart-prices"
 
@@ -12,8 +10,8 @@ import { findStaleCartPricesWorkflow } from "../find-stale-cart-prices"
  * Price part of the last check before a cart becomes an order.
  *
  * Every line must be at today's price, with one exception: the customer opened
- * a Razorpay payment at a snapshotted price and Razorpay confirms that exact
- * order was paid in full for that exact cart. Then the order is placed at the
+ * an online payment at a snapshotted price and its provider confirms that exact
+ * attempt was paid in full for that exact cart. Then the order is placed at the
  * price they paid, even if a sale ended while they were paying. Otherwise a
  * stale cart is refused rather than repriced, so the customer sees the new
  * total first. Cash on Delivery and wallet-only orders always need today's price.
@@ -29,15 +27,16 @@ export async function validateCurrentPrices(cart: { id: string }, container: Med
     try {
       honoured = (await checkPaidSnapshot(container, cart.id)).honoured
     } catch (error) {
-      if (!(error instanceof RazorpayUnavailableError)) throw error
+      if (!(error instanceof GatewayUnavailableError)) throw error
       // Unknown, so neither refuse for good nor accept: a 500 makes the caller retry.
+      const provider = getGateway((await loadCartPaymentState(container, cart.id))?.session?.provider_id)?.name ?? "the payment provider"
       throw new MedusaError(
         MedusaError.Types.UNEXPECTED_STATE,
-        "We could not confirm your payment with Razorpay just now. Please try again shortly."
+        `We could not confirm your payment with ${provider} just now. Please try again shortly.`
       )
     }
     if (honoured) {
-      logger.info(`[paid-price] cart ${cart.id} placed at the price paid at Razorpay (${stale.length} line(s) changed since)`)
+      logger.info(`[paid-price] cart ${cart.id} placed at the price paid online (${stale.length} line(s) changed since)`)
       return
     }
     throw new MedusaError(MedusaError.Types.NOT_ALLOWED, stalePriceMessage(stale))
@@ -46,13 +45,12 @@ export async function validateCurrentPrices(cart: { id: string }, container: Med
   await validateSnapshotAmount(cart.id, container)
 }
 
-/** A Razorpay payment opened with a snapshot must still ask for the snapshotted amount. */
+/** An online payment opened with a snapshot must still ask for the snapshotted amount. */
 async function validateSnapshotAmount(cartId: string, container: MedusaContainer) {
   const state = await loadCartPaymentState(container, cartId)
   const session = state?.session
-  if (!state || !session || session.provider_id !== RAZORPAY_PROVIDER_ID) return
-  const service: PaymentSnapshotModuleService = container.resolve(PAYMENT_SNAPSHOT_MODULE)
-  const [snapshot] = await service.listPaymentPriceSnapshots({ payment_session_id: session.id, superseded_at: null }, { take: 1 })
+  if (!state || !session || !getGateway(session.provider_id)) return
+  const snapshot = await snapshotFor(container, session.id)
   if (!snapshot) return
   if (toPaise(session.amount) !== snapshot.amount_paise || toPaise(state.cart.total) !== snapshot.amount_paise) {
     throw new MedusaError(

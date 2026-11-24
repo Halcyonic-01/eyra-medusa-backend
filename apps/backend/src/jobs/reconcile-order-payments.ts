@@ -1,7 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { findReconcileCandidates } from "../modules/order-dispatch/payment-reconcile"
-import { RazorpayUnavailableError } from "../modules/payment-snapshot/razorpay-api"
+import { GatewayUnavailableError } from "../modules/payment-snapshot/gateways"
 import { postToStorefront } from "../utils/storefront"
 import { repairOrderPaymentWorkflow } from "../workflows/repair-order-payment"
 
@@ -25,7 +25,7 @@ export default async function reconcileOrderPayments(container: MedusaContainer)
       })
       if (errors?.length || !result) {
         const error = errors?.[0]?.error as Error | undefined
-        const why = error instanceof RazorpayUnavailableError ? "Razorpay unreachable, will retry" : error?.message ?? "no result"
+        const why = error instanceof GatewayUnavailableError ? "payment provider unreachable, will retry" : error?.message ?? "no result"
         logger.error(`[payment-reconcile] order ${candidate.order_id} not repaired this run: ${why}`)
         continue
       }

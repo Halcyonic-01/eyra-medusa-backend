@@ -7,32 +7,32 @@ import { recordRazorpayIds } from "../../utils/order-confirmation"
 import { postToStorefront } from "../../utils/storefront"
 import { PAYMENT_SNAPSHOT_MODULE } from "."
 import { loadCartPaymentState } from "./check"
-import { judgeLateAttempt, type LateDecision } from "./late-payment-rules"
-import { fetchRazorpayOrderPayments } from "./razorpay-api"
 import {
   RAZORPAY_PROVIDER_ID,
-  paidTowardsOrder,
-  sessionRazorpayOrderId,
-  type PaymentSnapshotRecord,
-  type RazorpayOrder,
-  type RazorpayPayment,
-  type SessionLike,
-} from "./rules"
+  checkoutLockKey,
+  getGateway,
+  paidTowardsAttempt,
+  sessionAttempt,
+  type GatewayAttempt,
+  type GatewayPayment,
+} from "./gateways"
+import { judgeLateAttempt, type LateDecision } from "./late-payment-rules"
+import { attemptRef, type PaymentSnapshotRecord, type SessionLike } from "./rules"
 import type PaymentSnapshotModuleService from "./service"
 
 /**
- * Finds and settles Razorpay payments taken on attempts that are no longer the
- * cart's current one (see late-payment-rules). Called before a cart completes,
- * from the webhook guard (through an event), when a new payment is opened and
- * by a job. Everything runs under the cart's checkout lock and is safe to
- * repeat: a payment is recovered into the order at most once and refunded at
- * most once.
+ * Finds and settles payments taken on online attempts that are no longer the
+ * cart's current one (see late-payment-rules), whichever provider each attempt
+ * is with: every provider question goes through that attempt's gateway.
+ * Called before a cart completes, from a provider's webhook guard (through an
+ * event), when a new payment is opened and by a job. Everything runs under the
+ * cart's checkout lock and is safe to repeat: a payment is recovered into the
+ * order at most once and refunded at most once.
  */
 
-/** Shared with start-razorpay-checkout, so no new attempt opens while a cart is settled. */
-export const checkoutLockKey = (cartId: string) => `razorpay-checkout:${cartId}`
+export { checkoutLockKey }
 export const LATE_PAYMENT_EVENT = "eyra.razorpay_late_payment"
-/** Razorpay settles a UPI or netbanking approval well within this. */
+/** Providers settle a UPI or netbanking approval well within this. */
 export const LATE_LOOKBACK_HOURS = 72
 const MAX_ATTEMPTS_PER_CART = 10
 const MAX_REFUND_TRIES = 5
@@ -41,18 +41,25 @@ const RECOVERY_REVIEW_HOURS = 24
 const LOCK_SECONDS = 120
 
 type Logger = { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }
-type Snapshot = PaymentSnapshotRecord & { id: string; superseded_at?: Date | null }
+type Snapshot = PaymentSnapshotRecord & { id: string; superseded_at?: Date | null; late_checked_at?: Date | string | null }
 type LateRow = {
   id: string
   cart_id: string
-  razorpay_order_id: string
-  razorpay_payment_id: string
+  provider_id: string
+  provider_ref: string | null
+  provider_payment_ref: string | null
+  razorpay_order_id: string | null
+  razorpay_payment_id: string | null
   amount_paise: number
   status: "recovered" | "refunding" | "refunded" | "needs_review"
   order_id: string | null
   refund_attempts: number
   created_at: Date | string
 }
+
+/** The attempt and payment of a row; rows from before the provider columns only have the Razorpay ones. */
+const rowRef = (row: LateRow) => row.provider_ref ?? row.razorpay_order_id ?? ""
+const rowPaymentRef = (row: LateRow) => row.provider_payment_ref ?? row.razorpay_payment_id ?? ""
 
 export type SettleResult = {
   cart_id: string
@@ -81,44 +88,48 @@ async function lateRows(container: MedusaContainer, cartId: string): Promise<Lat
   return (await service(container).listLateRazorpayPayments({ cart_id: cartId })) as unknown as LateRow[]
 }
 
-/** The order the cart became and every Razorpay order behind it (payments, sessions, recorded ids). */
-export async function loadCartOrder(container: MedusaContainer, cartId: string): Promise<{ id: string; razorpay_order_ids: string[] } | null> {
+const sameAttempt = (a: { provider_id?: string | null }, aRef: string | null, b: { provider_id?: string | null }, bRef: string | null) =>
+  Boolean(aRef) && a.provider_id === b.provider_id && aRef === bRef
+
+/** The order the cart became and every attempt behind it (payments, sessions, recorded Razorpay ids). */
+export async function loadCartOrder(container: MedusaContainer, cartId: string): Promise<{ id: string; attempt_refs: string[] } | null> {
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
   const { data: links } = await query.graph({ entity: "order_cart", fields: ["order_id"], filters: { cart_id: cartId } })
   const orderId = (links[0] as { order_id?: string } | undefined)?.order_id
   if (!orderId) return null
   const { data } = await query.graph({
     entity: "order",
-    fields: ["id", "metadata", "payment_collections.payments.data", "payment_collections.payment_sessions.data"],
+    fields: [
+      "id",
+      "metadata",
+      "payment_collections.payments.provider_id",
+      "payment_collections.payments.data",
+      "payment_collections.payment_sessions.provider_id",
+      "payment_collections.payment_sessions.data",
+    ],
     filters: { id: orderId },
   })
   const order = data[0] as any
-  const ids = new Set<string>()
-  const add = (value: unknown) => typeof value === "string" && value && ids.add(value)
+  const refs = new Set<string>()
+  const add = (value: unknown) => typeof value === "string" && value && refs.add(value)
   add(order?.metadata?.razorpay_order_id)
   for (const collection of order?.payment_collections ?? []) {
-    for (const payment of collection?.payments ?? []) add(payment?.data?.razorpayOrder?.id)
+    for (const payment of collection?.payments ?? []) add(sessionAttempt(payment).ref)
     // A crash can leave an order whose payment is not recorded yet; its session still names it.
-    for (const session of collection?.payment_sessions ?? []) add(session?.data?.razorpayOrder?.id)
+    for (const session of collection?.payment_sessions ?? []) add(sessionAttempt(session).ref)
   }
-  return { id: orderId, razorpay_order_ids: [...ids] }
+  return { id: orderId, attempt_refs: [...refs] }
 }
 
 /**
- * Points the cart's current (unpaid) Razorpay session at the paid older attempt,
- * so Medusa completes the cart with the payment the customer actually made.
- * The Razorpay plugin's update keeps the given Razorpay order instead of
- * opening a new one. The attempt's snapshot then takes over the session.
+ * Points the cart's current (unpaid) session at the paid older attempt of the
+ * same provider, so Medusa completes the cart with the payment the customer
+ * actually made. The attempt's snapshot then takes over the session.
  */
-async function rebindSession(container: MedusaContainer, current: SessionLike, snapshot: Snapshot, razorpayOrder: RazorpayOrder) {
-  const notes = { ...((razorpayOrder as { notes?: Record<string, unknown> }).notes ?? {}), medusa_payment_session_id: current.id }
-  await container.resolve(Modules.PAYMENT).updatePaymentSession({
-    id: current.id,
-    amount: snapshot.amount_paise / 100,
-    currency_code: snapshot.currency_code,
-    data: { razorpayOrder: { ...razorpayOrder, notes } },
-    context: { idempotency_key: current.id },
-  } as never)
+async function rebindSession(container: MedusaContainer, current: SessionLike, snapshot: Snapshot, attempt: GatewayAttempt) {
+  const gateway = getGateway(snapshot.provider_id)
+  if (!gateway) throw new MedusaError(MedusaError.Types.UNEXPECTED_STATE, `No gateway for ${snapshot.provider_id}`)
+  await gateway.rebindSession(container, current, attempt, snapshot.amount_paise / 100, snapshot.currency_code)
   await claimSession(container, snapshot, current.id)
 }
 
@@ -135,6 +146,7 @@ async function claimSession(container: MedusaContainer, snapshot: Snapshot, sess
 }
 
 async function alertOps(container: MedusaContainer, row: LateRow, kind: "refunded" | "needs_review", detail: string) {
+  const razorpay = row.provider_id === RAZORPAY_PROVIDER_ID
   const sent = await postToStorefront(
     "/api/ops/notify",
     {
@@ -142,8 +154,12 @@ async function alertOps(container: MedusaContainer, row: LateRow, kind: "refunde
       outcome: kind,
       cart_id: row.cart_id,
       order_id: row.order_id,
-      razorpay_order_id: row.razorpay_order_id,
-      razorpay_payment_id: row.razorpay_payment_id,
+      provider_id: row.provider_id,
+      provider_ref: rowRef(row),
+      provider_payment_ref: rowPaymentRef(row),
+      // The storefront's alert reads these names.
+      razorpay_order_id: razorpay ? rowRef(row) : null,
+      razorpay_payment_id: razorpay ? rowPaymentRef(row) : null,
       amount: row.amount_paise / 100,
       detail,
     },
@@ -152,25 +168,36 @@ async function alertOps(container: MedusaContainer, row: LateRow, kind: "refunde
   if (sent === "sent") await service(container).updateLateRazorpayPayments({ id: row.id, alerted_at: new Date() })
 }
 
-/** The row for a Razorpay payment, created once. A racing insert loses to the unique index and reads the winner. */
+/** The row for a provider payment, created once. A racing insert loses to the unique index and reads the winner. */
 async function rowFor(
   container: MedusaContainer,
   snapshot: Snapshot,
-  payment: RazorpayPayment,
+  payment: GatewayPayment,
   values: { status: LateRow["status"]; reason: string; order_id: string | null }
 ): Promise<LateRow> {
   const snapshots = service(container)
-  const find = async () =>
-    ((await snapshots.listLateRazorpayPayments({ razorpay_payment_id: payment.id }, { take: 1 })) as unknown as LateRow[])[0]
+  const razorpay = snapshot.provider_id === RAZORPAY_PROVIDER_ID
+  const find = async () => {
+    const [row] = (await snapshots.listLateRazorpayPayments(
+      { provider_id: snapshot.provider_id, provider_payment_ref: payment.id },
+      { take: 1 }
+    )) as unknown as LateRow[]
+    if (row || !razorpay) return row
+    // Written before the provider columns existed.
+    return ((await snapshots.listLateRazorpayPayments({ razorpay_payment_id: payment.id }, { take: 1 })) as unknown as LateRow[])[0]
+  }
   const existing = await find()
   if (existing) return existing
   try {
     return (await snapshots.createLateRazorpayPayments({
       cart_id: snapshot.cart_id,
       snapshot_id: snapshot.id,
-      razorpay_order_id: snapshot.razorpay_order_id,
-      razorpay_payment_id: payment.id,
-      amount_paise: Number(payment.amount),
+      provider_id: snapshot.provider_id,
+      provider_ref: attemptRef(snapshot),
+      provider_payment_ref: payment.id,
+      razorpay_order_id: razorpay ? attemptRef(snapshot) : null,
+      razorpay_payment_id: razorpay ? payment.id : null,
+      amount_paise: Number(payment.amount_paise),
       currency_code: snapshot.currency_code,
       ...values,
     })) as unknown as LateRow
@@ -182,27 +209,44 @@ async function rowFor(
 }
 
 /**
- * Refunds one late payment, once however often it is called: the refund is
- * tagged with the row id and Razorpay is searched for it before anything is
- * sent. Gives up to a person after repeated clear refusals. Called with the
- * cart locks held, and never refunds a payment the cart's order is paid with.
+ * Before refunding a payment of an open cart: drop any session that points at
+ * its attempt. A provider can still call a refunded attempt "paid" (Razorpay
+ * does), so a later completion must not be able to use it. The customer opens
+ * a new payment.
+ */
+async function unbindSessions(container: MedusaContainer, row: LateRow) {
+  const state = await loadCartPaymentState(container, row.cart_id)
+  for (const session of state?.prepaidSessions ?? []) {
+    const { ref } = sessionAttempt(session)
+    if (session.provider_id === row.provider_id && ref === rowRef(row)) {
+      await container.resolve(Modules.PAYMENT).deletePaymentSession(session.id)
+    }
+  }
+}
+
+/**
+ * Refunds one late payment through its provider, once however often it is
+ * called: the refund is tagged with the row id and the provider is searched
+ * for it before anything is sent. Gives up to a person after repeated clear
+ * refusals. Called with the cart locks held, and never refunds a payment the
+ * cart's order is paid with.
  */
 async function refundRow(container: MedusaContainer, row: LateRow): Promise<LateRow["status"]> {
   if (row.status === "refunded" || row.status === "needs_review") return row.status
   const snapshots = service(container)
   const order = await loadCartOrder(container, row.cart_id)
-  if (order?.razorpay_order_ids.includes(row.razorpay_order_id)) {
+  if (order?.attempt_refs.includes(rowRef(row))) {
     await snapshots.updateLateRazorpayPayments({ id: row.id, status: "recovered", order_id: order.id, resolved_at: new Date() })
-    logger(container).warn(`[late-payment] ${row.razorpay_payment_id} is the payment of order ${order.id}; not refunding it`)
+    logger(container).warn(`[late-payment] ${rowPaymentRef(row)} is the payment of order ${order.id}; not refunding it`)
     return "recovered"
   }
-  if (!order) await unbindSessions(container, row.cart_id, row.razorpay_order_id)
+  if (!order) await unbindSessions(container, row)
   if (row.status !== "refunding") await snapshots.updateLateRazorpayPayments({ id: row.id, status: "refunding" })
 
-  const result = await getRefundGateway().refund({
+  const result = await getRefundGateway(row.provider_id).refund({
     order_id: row.order_id ?? row.cart_id,
-    razorpay_payment_id: row.razorpay_payment_id,
-    razorpay_order_id: row.razorpay_order_id,
+    payment_ref: rowPaymentRef(row),
+    attempt_ref: rowRef(row),
     amount: row.amount_paise / 100,
     fee: 0,
     cancellation_id: row.id,
@@ -218,7 +262,7 @@ async function refundRow(container: MedusaContainer, row: LateRow): Promise<Late
       last_error: null,
       resolved_at: new Date(),
     })
-    logger(container).warn(`[late-payment] refunded Razorpay payment ${row.razorpay_payment_id} of cart ${row.cart_id} (${row.amount_paise / 100})`)
+    logger(container).warn(`[late-payment] refunded ${row.provider_id} payment ${rowPaymentRef(row)} of cart ${row.cart_id} (${row.amount_paise / 100})`)
     await alertOps(container, { ...row, status: "refunded" }, "refunded", "Refunded automatically.")
     return "refunded"
   }
@@ -230,12 +274,12 @@ async function refundRow(container: MedusaContainer, row: LateRow): Promise<Late
     refund_attempts: attempts,
     last_error: result.error.slice(0, 500),
   })
-  logger(container).error(`[late-payment] refund of ${row.razorpay_payment_id} (cart ${row.cart_id}) not done: ${result.error}`)
+  logger(container).error(`[late-payment] refund of ${rowPaymentRef(row)} (cart ${row.cart_id}) not done: ${result.error}`)
   if (giveUp) await alertOps(container, { ...row, status: "needs_review" }, "needs_review", result.error)
   return giveUp ? "needs_review" : "refunding"
 }
 
-/** Settles one cart. Throws RazorpayUnavailableError when Razorpay cannot be asked; nothing is decided then. */
+/** Settles one cart. Throws GatewayUnavailableError when a provider cannot be asked; nothing is decided for it then. */
 async function settleLocked(container: MedusaContainer, cartId: string, result: SettleResult, recheckAfterMinutes: number) {
   const attempts = await cartAttempts(container, cartId)
   const rows = await lateRows(container, cartId)
@@ -246,44 +290,50 @@ async function settleLocked(container: MedusaContainer, cartId: string, result: 
 
   const state = await loadCartPaymentState(container, cartId)
   if (!state) return
-  let current = state.session
-  const currentOrderId = () => (current?.provider_id === RAZORPAY_PROVIDER_ID ? sessionRazorpayOrderId(current) : null)
+  const current = state.session
+  const currentGateway = sessionAttempt(current).gateway
+  let currentRef = sessionAttempt(current).ref
 
   // A rebind that stopped half-way: the attempt the session now pays must hold the session.
-  const holder = attempts.find((a) => a.razorpay_order_id === currentOrderId())
+  const holder = current ? attempts.find((a) => sameAttempt(a, attemptRef(a), current, currentRef)) : undefined
   if (holder && current && (holder.payment_session_id !== current.id || holder.superseded_at)) {
     await claimSession(container, holder, current.id)
   }
 
   const order = await loadCartOrder(container, cartId)
-  const others = attempts.filter((a) => a.razorpay_order_id !== currentOrderId())
+  const others = attempts.filter((a) => !current || !sameAttempt(a, attemptRef(a), current, currentRef))
 
   let currentPaid = 0
-  const currentRazorpay = currentOrderId()
-  if (!order && currentRazorpay && others.length) {
-    const fetched = await fetchRazorpayOrderPayments(currentRazorpay)
-    currentPaid = fetched.order ? paidTowardsOrder(fetched.order, fetched.payments) : 0
+  if (!order && currentGateway && currentRef && others.length) {
+    const fetched = await currentGateway.fetchAttempt(currentRef)
+    currentPaid = fetched ? paidTowardsAttempt(fetched) : 0
   }
 
   for (const attempt of others) {
-    const mine = rows.filter((row) => row.razorpay_order_id === attempt.razorpay_order_id)
+    const ref = attemptRef(attempt)
+    const mine = rows.filter((row) => row.provider_id === attempt.provider_id && rowRef(row) === ref)
     if (mine.some((row) => row.status === "needs_review")) {
       result.review += 1
       continue
     }
     if (mine.some((row) => row.status === "refunding")) continue
-    const checkedAt = (attempt as { late_checked_at?: Date | string | null }).late_checked_at
+    const checkedAt = attempt.late_checked_at
     if (recheckAfterMinutes && checkedAt && Date.now() - new Date(checkedAt).getTime() < recheckAfterMinutes * 60 * 1000) continue
+    const gateway = getGateway(attempt.provider_id)
+    if (!gateway) {
+      logger(container).error(`[late-payment] cart ${cartId}: no gateway for ${attempt.provider_id}, attempt ${ref} cannot be checked`)
+      continue
+    }
 
-    const fetched = await fetchRazorpayOrderPayments(attempt.razorpay_order_id)
+    const fetched = await gateway.fetchAttempt(ref)
     result.checked += 1
     await service(container).updatePaymentPriceSnapshots({ id: attempt.id, late_checked_at: new Date() })
     const decision: LateDecision = judgeLateAttempt({
       snapshot: attempt,
-      razorpayOrder: fetched.order,
-      payments: fetched.payments,
+      attempt: fetched,
       cart: state.cart as never,
       currentSession: current,
+      currentSessionRef: currentRef,
       currentPaidPaise: currentPaid,
       order,
     })
@@ -304,16 +354,16 @@ async function settleLocked(container: MedusaContainer, cartId: string, result: 
       result.waiting += 1
       continue
     }
-    if (decision.action === "recover" && current && fetched.order) {
-      await rebindSession(container, current, attempt, fetched.order)
-      for (const payment of fetched.payments.filter((p) => p.order_id === attempt.razorpay_order_id && p.status === "captured")) {
+    if (decision.action === "recover" && current && fetched) {
+      await rebindSession(container, current, attempt, fetched)
+      for (const payment of fetched.payments.filter((p) => p.attempt_ref === ref && p.status === "captured")) {
         await rowFor(container, attempt, payment, { status: "recovered", reason: "recovered", order_id: null })
       }
-      logger(container).warn(`[late-payment] cart ${cartId}: session ${current.id} now completes with paid Razorpay order ${attempt.razorpay_order_id}`)
+      logger(container).warn(`[late-payment] cart ${cartId}: session ${current.id} now completes with paid ${attempt.provider_id} attempt ${ref}`)
       result.recovered = true
       // Anything else paid for this cart now waits for this one to become the order.
-      currentPaid = paidTowardsOrder(fetched.order, fetched.payments)
-      current = { ...current, data: { razorpayOrder: fetched.order } }
+      currentPaid = paidTowardsAttempt(fetched)
+      currentRef = ref
       continue
     }
     if (decision.action === "none" && decision.reason === "in_order" && order) {
@@ -344,7 +394,7 @@ async function finishRecoveries(container: MedusaContainer, cartId: string, resu
     const { result: completed, errors } = await completeCartWorkflow(container).run({ input: { id: cartId }, throwOnError: false })
     if (errors?.length) {
       const error = errors[0]?.error as { type?: string; message?: string } | undefined
-      // The payment is confirmed paid, so an authorization failure means Razorpay trouble: retry, never refund.
+      // The payment is confirmed paid, so an authorization failure means provider trouble: retry, never refund.
       const refused =
         (error?.type === MedusaError.Types.NOT_ALLOWED || error?.type === MedusaError.Types.INVALID_DATA) &&
         !/not authorized/i.test(error?.message ?? "")
@@ -364,49 +414,45 @@ async function finishRecoveries(container: MedusaContainer, cartId: string, resu
   result.order_id = order.id
   const pg = container.resolve(ContainerRegistrationKeys.PG_CONNECTION) as unknown as Pg
   for (const row of pending) {
-    if (!order.razorpay_order_ids.includes(row.razorpay_order_id)) continue
-    // Razorpay's capture notice was answered before the rebind and is not sent again, so record it here.
+    if (!order.attempt_refs.includes(rowRef(row))) continue
+    // The provider's capture notice was answered before the rebind and is not sent again, so record it here.
     if (!(await recordCapture(container, order.id, row))) continue
     await service(container).updateLateRazorpayPayments({ id: row.id, order_id: order.id, resolved_at: new Date() })
-    // Same conditional write the storefront makes, so either may come first.
-    await recordRazorpayIds(pg, order.id, row.razorpay_order_id, row.razorpay_payment_id).catch(() => false)
+    if (row.provider_id === RAZORPAY_PROVIDER_ID) {
+      // Same conditional write the storefront makes, so either may come first.
+      await recordRazorpayIds(pg, order.id, rowRef(row), rowPaymentRef(row)).catch(() => false)
+    }
   }
 }
 
 /**
- * Records in Medusa that the recovered payment is captured. Razorpay captured
- * it already; the plugin's capture only captures payments still authorized, so
- * no money moves. False when it could not be recorded (retried next run).
+ * Records in Medusa that the recovered payment is captured. The provider
+ * captured it already; Razorpay's plugin only captures payments still
+ * authorized, so no money moves. False when it could not be recorded (retried
+ * next run).
  */
 async function recordCapture(container: MedusaContainer, orderId: string, row: LateRow): Promise<boolean> {
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
   const { data } = await query.graph({
     entity: "order",
-    fields: ["payment_collections.payments.id", "payment_collections.payments.captured_at", "payment_collections.payments.data"],
+    fields: [
+      "payment_collections.payments.id",
+      "payment_collections.payments.provider_id",
+      "payment_collections.payments.captured_at",
+      "payment_collections.payments.data",
+    ],
     filters: { id: orderId },
   })
   const payments = ((data[0] as any)?.payment_collections ?? []).flatMap((c: any) => c?.payments ?? []).filter(Boolean)
-  const payment = payments.find((p: any) => p.data?.razorpayOrder?.id === row.razorpay_order_id)
+  const payment = payments.find((p: any) => p.provider_id === row.provider_id && sessionAttempt(p).ref === rowRef(row))
   if (!payment) return false
   if (payment.captured_at) return true
   const { errors } = await capturePaymentWorkflow(container).run({ input: { payment_id: payment.id }, throwOnError: false })
   if (errors?.length) {
-    logger(container).error(`[late-payment] could not record the capture of ${row.razorpay_payment_id} on order ${orderId}: ${(errors[0].error as Error)?.message}`)
+    logger(container).error(`[late-payment] could not record the capture of ${rowPaymentRef(row)} on order ${orderId}: ${(errors[0].error as Error)?.message}`)
     return false
   }
   return true
-}
-
-/**
- * Before refunding a payment of an open cart: drop any session that points at
- * its Razorpay order. Razorpay still calls a refunded order "paid", so a later
- * completion must not be able to use it. The customer opens a new payment.
- */
-async function unbindSessions(container: MedusaContainer, cartId: string, razorpayOrderId: string) {
-  const state = await loadCartPaymentState(container, cartId)
-  for (const session of state?.razorpaySessions ?? []) {
-    if (sessionRazorpayOrderId(session) === razorpayOrderId) await container.resolve(Modules.PAYMENT).deletePaymentSession(session.id)
-  }
 }
 
 /** Completion refused the recovered payment: refund it, unless the cart became an order meanwhile. */
@@ -437,7 +483,7 @@ function withCartLock<T>(container: MedusaContainer, cartId: string, job: () => 
  * Settles every late payment of a cart. With `complete`, a recovered payment is
  * also turned into the order here; without it the caller is about to complete
  * the cart itself (the store complete route). `recheckAfterMinutes` lets the job
- * skip attempts it asked Razorpay about moments ago.
+ * skip attempts it asked the provider about moments ago.
  */
 export async function settleLatePayments(
   container: MedusaContainer,
@@ -450,32 +496,48 @@ export async function settleLatePayments(
   return result
 }
 
-/** Asks for a cart to be settled soon, without waiting (the webhook must answer quickly). */
+/** Asks for a cart to be settled soon, without waiting (a webhook must answer quickly). */
 export async function requestSettle(container: MedusaContainer, cartId: string) {
   await container.resolve(Modules.EVENT_BUS).emit({ name: LATE_PAYMENT_EVENT, data: { cart_id: cartId } })
 }
 
 /**
  * Whether money has been taken on any attempt of the cart, current or replaced,
- * that is not being given back. Opening another payment then is refused.
- * Throws RazorpayUnavailableError when Razorpay cannot be asked.
+ * on any provider, that is not being given back (opening another payment is
+ * then refused), and which providers still have a payment in progress (one
+ * that may yet succeed). Throws GatewayUnavailableError when a provider cannot
+ * be asked, so an uncertain answer is never read as "unpaid".
  */
 export async function paidAttempts(
   container: MedusaContainer,
   cartId: string,
   sessions: SessionLike[]
-): Promise<{ current: boolean; replaced: boolean }> {
+): Promise<{ current: boolean; replaced: boolean; pending_providers: string[] }> {
+  const key = (providerId: string | null | undefined, ref: string) => `${providerId ?? ""}|${ref}`
   const returning = new Set(
-    (await lateRows(container, cartId)).filter((row) => row.status !== "recovered").map((row) => row.razorpay_payment_id)
+    (await lateRows(container, cartId)).filter((row) => row.status !== "recovered").map((row) => key(row.provider_id, rowPaymentRef(row)))
   )
-  const currentIds = new Set(sessions.map((s) => sessionRazorpayOrderId(s)).filter((id): id is string => Boolean(id)))
-  const ids = new Set([...currentIds, ...(await cartAttempts(container, cartId)).map((a) => a.razorpay_order_id)])
-  const found = { current: false, replaced: false }
-  for (const id of ids) {
-    const { order, payments } = await fetchRazorpayOrderPayments(id)
-    if (!order) continue
-    const kept = payments.filter((payment) => !returning.has(payment.id))
-    if (paidTowardsOrder(order, kept) > 0) found[currentIds.has(id) ? "current" : "replaced"] = true
+  const targets = new Map<string, { provider_id: string; ref: string; current: boolean }>()
+  for (const session of sessions) {
+    const { ref } = sessionAttempt(session)
+    if (ref && session.provider_id) targets.set(key(session.provider_id, ref), { provider_id: session.provider_id, ref, current: true })
+  }
+  for (const attempt of await cartAttempts(container, cartId)) {
+    const ref = attemptRef(attempt)
+    if (ref && !targets.has(key(attempt.provider_id, ref))) targets.set(key(attempt.provider_id, ref), { provider_id: attempt.provider_id, ref, current: false })
+  }
+
+  const found = { current: false, replaced: false, pending_providers: [] as string[] }
+  for (const target of targets.values()) {
+    const gateway = getGateway(target.provider_id)
+    if (!gateway) continue
+    const attempt = await gateway.fetchAttempt(target.ref)
+    if (!attempt) continue
+    const kept = { ...attempt, payments: attempt.payments.filter((p) => !returning.has(key(target.provider_id, p.id))) }
+    if (paidTowardsAttempt(kept) > 0) found[target.current ? "current" : "replaced"] = true
+    if (kept.payments.some((p) => p.attempt_ref === attempt.ref && p.status === "pending") && !found.pending_providers.includes(target.provider_id)) {
+      found.pending_providers.push(target.provider_id)
+    }
   }
   return found
 }

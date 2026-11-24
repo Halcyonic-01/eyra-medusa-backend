@@ -2,11 +2,11 @@ import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { CART_RULE_FIELDS } from "../../utils/cart-summary"
 import { PAYMENT_SNAPSHOT_MODULE } from "."
-import { fetchRazorpayOrderPayments } from "./razorpay-api"
+import { isPrepaidProvider, sessionAttempt } from "./gateways"
 import {
-  RAZORPAY_PROVIDER_ID,
   judgePaidSnapshot,
   snapshotMatchesCart,
+  attemptRef,
   type CartLike,
   type PaymentSnapshotRecord,
   type SessionLike,
@@ -32,8 +32,8 @@ export type CartPaymentState = {
   cart: CartLike & { completed_at?: unknown; payment_collection?: { id?: string } | null }
   /** The session Medusa would use to complete the cart, if any. */
   session: SessionLike | null
-  /** Every Razorpay session still on the cart. */
-  razorpaySessions: SessionLike[]
+  /** Every online (prepaid) session still on the cart, whichever provider. */
+  prepaidSessions: SessionLike[]
 }
 
 export async function loadCartPaymentState(container: MedusaContainer, cartId: string): Promise<CartPaymentState | null> {
@@ -48,37 +48,31 @@ export async function loadCartPaymentState(container: MedusaContainer, cartId: s
   return {
     cart,
     session: processable[0] ?? null,
-    razorpaySessions: sessions.filter((s) => s.provider_id === RAZORPAY_PROVIDER_ID),
+    prepaidSessions: sessions.filter((s) => isPrepaidProvider(s.provider_id)),
   }
 }
 
-async function snapshotFor(container: MedusaContainer, sessionId: string): Promise<PaymentSnapshotRecord | null> {
+/** The current attempt recorded for a session (a superseded one never holds it). */
+export async function snapshotFor(container: MedusaContainer, sessionId: string): Promise<PaymentSnapshotRecord | null> {
   const service: PaymentSnapshotModuleService = container.resolve(PAYMENT_SNAPSHOT_MODULE)
   const [snapshot] = await service.listPaymentPriceSnapshots({ payment_session_id: sessionId, superseded_at: null }, { take: 1 })
   return (snapshot as unknown as PaymentSnapshotRecord) ?? null
 }
 
 /**
- * Whether the cart's current Razorpay payment was opened at a snapshotted price
- * and Razorpay confirms it was paid in full. Razorpay is asked only when the
- * cart still matches its snapshot. Throws RazorpayUnavailableError when
- * Razorpay cannot be asked, so callers can fail closed.
+ * Whether the cart's current online payment was opened at a snapshotted price
+ * and its provider confirms it was paid in full. The provider is asked only
+ * when the cart still matches its snapshot. Throws GatewayUnavailableError when
+ * the provider cannot be asked, so callers can fail closed.
  */
 export async function checkPaidSnapshot(container: MedusaContainer, cartId: string): Promise<SnapshotVerdict> {
   const state = await loadCartPaymentState(container, cartId)
-  if (!state?.session || state.session.provider_id !== RAZORPAY_PROVIDER_ID) {
-    return { honoured: false, reason: "no_snapshot" }
-  }
+  const { gateway, ref } = sessionAttempt(state?.session)
+  if (!state?.session || !gateway) return { honoured: false, reason: "no_snapshot" }
   const snapshot = await snapshotFor(container, state.session.id)
-  const local = snapshotMatchesCart(snapshot, state.cart, state.session)
+  const local = snapshotMatchesCart(snapshot, state.cart, state.session, ref)
   if (!local.honoured) return local
 
-  const { order, payments } = await fetchRazorpayOrderPayments((snapshot as PaymentSnapshotRecord).razorpay_order_id)
-  return judgePaidSnapshot({
-    snapshot,
-    cart: state.cart,
-    session: state.session,
-    razorpayOrder: order,
-    razorpayPayments: payments,
-  })
+  const attempt = await gateway.fetchAttempt(attemptRef(snapshot as PaymentSnapshotRecord))
+  return judgePaidSnapshot({ snapshot, cart: state.cart, session: state.session, sessionRef: ref, attempt })
 }

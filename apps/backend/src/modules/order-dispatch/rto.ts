@@ -136,10 +136,10 @@ export async function processReturnedParcel(container: MedusaContainer, orderId:
         error: "The online payment could not be matched, so it must be refunded by hand",
       })
     }
-    const refund = await getRefundGateway().refund({
+    const refund = await getRefundGateway(context.online_provider_id ?? undefined).refund({
       order_id: orderId,
-      razorpay_payment_id: context.razorpay_payment_id,
-      razorpay_order_id: context.razorpay_order_id,
+      payment_ref: context.payment_ref ?? context.razorpay_payment_id,
+      attempt_ref: context.attempt_ref ?? context.razorpay_order_id,
       amount: toOnline,
       fee: REVERSE_LOGISTICS_FEE,
       cancellation_id: `rto-${noteId}`,
