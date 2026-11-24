@@ -6,7 +6,7 @@ import {
   releaseLockStep,
   useQueryGraphStep,
 } from "@medusajs/medusa/core-flows"
-import { RAZORPAY_PROVIDER_ID } from "../modules/payment-snapshot/rules"
+import { RAZORPAY_PROVIDER_ID, checkoutLockKey } from "../modules/payment-snapshot/gateways/ids"
 import { findStaleCartPricesWorkflow } from "./find-stale-cart-prices"
 import { refreshStaleCartPricesWorkflow } from "./refresh-stale-cart-prices"
 import { guardRazorpayCheckoutStep } from "./steps/guard-razorpay-checkout"
@@ -24,7 +24,8 @@ export type StartRazorpayCheckoutInput = { cart_id: string }
 export const startRazorpayCheckoutWorkflow = createWorkflow(
   "start-razorpay-checkout",
   function (input: StartRazorpayCheckoutInput) {
-    const lockKey = transform({ input }, (data) => `razorpay-checkout:${data.input.cart_id}`)
+    // Shared with every provider's checkout and the late-payment settle.
+    const lockKey = transform({ input }, (data) => checkoutLockKey(data.input.cart_id))
     acquireLockStep({ key: lockKey, timeout: 30, ttl: 120 })
 
     guardRazorpayCheckoutStep({ cart_id: input.cart_id })

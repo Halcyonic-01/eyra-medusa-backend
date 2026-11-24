@@ -1,10 +1,13 @@
+import { razorpayAttempt } from "../gateways/razorpay-shape"
+import { paidTowardsAttempt } from "../gateways/types"
 import {
   RAZORPAY_PROVIDER_ID,
-  buildSnapshot,
+  buildSnapshot as buildWith,
   judgePaidSnapshot,
-  paidTowardsOrder,
+  sessionRazorpayAmount,
+  sessionRazorpayOrderId,
   snapshotLines,
-  snapshotMatchesCart,
+  snapshotMatchesCart as matchWith,
   toPaise,
   type CartLike,
   type PaymentSnapshotRecord,
@@ -35,6 +38,13 @@ const session = (over: Partial<SessionLike> = {}): SessionLike => ({
   data: { razorpayOrder: { id: "order_1", amount: 100000, currency: "INR" } },
   ...over,
 })
+
+// What the Razorpay gateway reads from a session; a session of another provider has no gateway (null).
+const binding = (s: SessionLike) =>
+  s.provider_id === RAZORPAY_PROVIDER_ID ? { ref: sessionRazorpayOrderId(s), attempt_amount_paise: sessionRazorpayAmount(s) } : null
+const buildSnapshot = (cart: CartLike, s: SessionLike, collectionId: string) => buildWith(cart, s, collectionId, binding(s))
+const snapshotMatchesCart = (snapshot: PaymentSnapshotRecord | null, cart: CartLike, s: SessionLike) =>
+  matchWith(snapshot, cart, s, sessionRazorpayOrderId(s))
 
 const snapshotOf = (cart = saleCart(), s = session()): PaymentSnapshotRecord => {
   const built = buildSnapshot(cart, s, "paycol_1")
@@ -75,6 +85,9 @@ describe("buildSnapshot", () => {
       cart_id: "cart_1",
       payment_collection_id: "paycol_1",
       payment_session_id: "payses_1",
+      provider_id: RAZORPAY_PROVIDER_ID,
+      provider_ref: "order_1",
+      provider_amount_paise: 100000,
       razorpay_order_id: "order_1",
       currency_code: "inr",
       amount_paise: 100000,
@@ -104,16 +117,16 @@ describe("buildSnapshot", () => {
   })
 })
 
-describe("paidTowardsOrder", () => {
+describe("paidTowardsAttempt", () => {
   it("counts captured and authorized payments for this order only", () => {
-    const paid = paidTowardsOrder(order(), [
+    const paid = paidTowardsAttempt(razorpayAttempt(order(), [
       payment({ id: "pay_1", amount: 60000 }),
       payment({ id: "pay_2", amount: 40000, status: "authorized" }),
       payment({ id: "pay_3", status: "failed" }),
       payment({ id: "pay_4", status: "refunded" }),
       payment({ id: "pay_5", order_id: "order_other" }),
       payment({ id: "pay_6", currency: "USD" }),
-    ])
+    ]))
     expect(paid).toBe(100000)
   })
 })
@@ -155,15 +168,18 @@ describe("snapshotMatchesCart", () => {
 })
 
 describe("judgePaidSnapshot", () => {
-  const judge = (over: Partial<Parameters<typeof judgePaidSnapshot>[0]> = {}) =>
-    judgePaidSnapshot({
-      snapshot: snapshotOf(),
-      cart: saleCart(),
-      session: session(),
-      razorpayOrder: order(),
-      razorpayPayments: [payment()],
-      ...over,
+  type Over = Partial<{ snapshot: PaymentSnapshotRecord | null; cart: CartLike; session: SessionLike; razorpayOrder: RazorpayOrder | null; razorpayPayments: RazorpayPayment[] }>
+  const judge = (over: Over = {}) => {
+    const s = over.session ?? session()
+    const rzpOrder = over.razorpayOrder === undefined ? order() : over.razorpayOrder
+    return judgePaidSnapshot({
+      snapshot: over.snapshot === undefined ? snapshotOf() : over.snapshot,
+      cart: over.cart ?? saleCart(),
+      session: s,
+      sessionRef: sessionRazorpayOrderId(s),
+      attempt: rzpOrder ? razorpayAttempt(rzpOrder, over.razorpayPayments ?? [payment()]) : null,
     })
+  }
 
   it("honours a sale price when the sale ended during a captured payment", () => {
     expect(judge()).toEqual({ honoured: true })

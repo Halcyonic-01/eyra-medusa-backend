@@ -2,14 +2,14 @@ import { MedusaError } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { loadCartPaymentState } from "../../modules/payment-snapshot/check"
 import { paidAttempts, requestSettle } from "../../modules/payment-snapshot/late-payments"
-import { RazorpayUnavailableError } from "../../modules/payment-snapshot/razorpay-api"
+import { GatewayUnavailableError } from "../../modules/payment-snapshot/gateways"
 
 /**
  * Refuses to open a new Razorpay payment for a cart that is already an order or
- * already paid, on the current attempt or on one it replaced: a new session
- * would drop the paid one, leaving money taken and no order. A paid replaced
- * attempt is handed to the late-payment settle. Fails closed when Razorpay
- * cannot be asked.
+ * already paid, on the current attempt or on one it replaced, with any
+ * provider: a new session would drop the paid one, leaving money taken and no
+ * order. A paid replaced attempt is handed to the late-payment settle. Fails
+ * closed when a provider cannot be asked.
  */
 export const guardRazorpayCheckoutStep = createStep(
   "guard-razorpay-checkout",
@@ -21,9 +21,9 @@ export const guardRazorpayCheckoutStep = createStep(
     }
     let paid: { current: boolean; replaced: boolean }
     try {
-      paid = await paidAttempts(container, input.cart_id, state.razorpaySessions)
+      paid = await paidAttempts(container, input.cart_id, state.prepaidSessions)
     } catch (error) {
-      if (!(error instanceof RazorpayUnavailableError)) throw error
+      if (!(error instanceof GatewayUnavailableError)) throw error
       throw new MedusaError(
         MedusaError.Types.UNEXPECTED_STATE,
         "We could not check your earlier payment just now. Please try again in a minute."

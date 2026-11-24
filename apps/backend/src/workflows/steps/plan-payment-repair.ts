@@ -1,17 +1,8 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
-import { fetchRazorpayOrderPayments } from "../../modules/payment-snapshot/razorpay-api"
-import {
-  RAZORPAY_PROVIDER_ID,
-  paidTowardsOrder,
-  sessionRazorpayAmount,
-  sessionRazorpayOrderId,
-  toPaise,
-  type SessionLike,
-} from "../../modules/payment-snapshot/rules"
-
-const COD_PROVIDER_ID = "pp_system_default"
+import { COD_PROVIDER_ID, getGateway, paidTowardsAttempt } from "../../modules/payment-snapshot/gateways"
+import { toPaise, type SessionLike } from "../../modules/payment-snapshot/rules"
 const PROCESSABLE = ["pending", "requires_more", "authorized"]
 
 export type PaymentRepairPlan =
@@ -22,9 +13,9 @@ export type PaymentRepairPlan =
 /**
  * Decides how to repair an order that was placed but has no payment record,
  * which happens when the server stops between Medusa creating the order and
- * authorizing its payment. A Razorpay payment is only recorded once Razorpay
- * itself confirms its order was paid in full for exactly the session's amount.
- * Throws when Razorpay cannot be asked, so the next run tries again.
+ * authorizing its payment. An online payment is only recorded once its provider
+ * confirms the attempt was paid in full for exactly the session's amount.
+ * Throws when the provider cannot be asked, so the next run tries again.
  */
 export const planPaymentRepairStep = createStep(
   "plan-payment-repair",
@@ -77,19 +68,20 @@ async function decidePaymentRepair(container: MedusaContainer, orderId: string):
     // Cash on Delivery: the customer confirmed the order; nothing is collected up front.
     return plan({ action: "authorize", session_id: session.id, provider_id: COD_PROVIDER_ID })
   }
-  if (session.provider_id !== RAZORPAY_PROVIDER_ID) return plan({ action: "unpaid", reason: "unsupported_provider" })
+  const gateway = getGateway(session.provider_id)
+  if (!gateway) return plan({ action: "unpaid", reason: "unsupported_provider" })
 
-  const razorpayOrderId = sessionRazorpayOrderId(session)
-  if (!razorpayOrderId) return plan({ action: "unpaid", reason: "no_razorpay_order" })
-  const { order: razorpayOrder, payments } = await fetchRazorpayOrderPayments(razorpayOrderId)
+  const ref = gateway.sessionRef(session)
+  if (!ref) return plan({ action: "unpaid", reason: "no_provider_attempt" })
+  const attempt = await gateway.fetchAttempt(ref)
   const expected = toPaise(session.amount)
   if (
-    !razorpayOrder ||
-    Number(razorpayOrder.amount) !== expected ||
-    sessionRazorpayAmount(session) !== expected ||
-    paidTowardsOrder(razorpayOrder, payments) !== expected
+    !attempt ||
+    attempt.amount_paise !== expected ||
+    gateway.sessionAttemptAmount(session) !== expected ||
+    paidTowardsAttempt(attempt) !== expected
   ) {
-    return plan({ action: "unpaid", reason: "not_paid_at_razorpay" })
+    return plan({ action: "unpaid", reason: "not_paid_at_provider" })
   }
-  return plan({ action: "authorize", session_id: session.id, provider_id: RAZORPAY_PROVIDER_ID })
+  return plan({ action: "authorize", session_id: session.id, provider_id: gateway.provider_id })
 }

@@ -1,6 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { WALLET_CREDIT_LINE_REFERENCE, roundMoney } from "../wallet/utils"
+import { RAZORPAY_PROVIDER_ID, isPrepaidProvider, sessionAttempt } from "../payment-snapshot/gateways"
 import type { CancellationContext } from "./cancellation"
 
 type Money = number | string | { value?: string | number } | null | undefined
@@ -29,7 +30,7 @@ type OrderRow = {
     payments?: {
       id: string
       provider_id?: string | null
-      data?: { razorpayOrder?: { id?: string } } | null
+      data?: Record<string, unknown> | null
       captures?: { amount?: Money }[]
       refunds?: { amount?: Money }[]
     }[]
@@ -80,7 +81,9 @@ export async function loadCancellationContext(
 
   const online = (order.payment_collections ?? [])
     .flatMap((collection) => collection.payments ?? [])
-    .filter((payment) => (payment.provider_id ?? "").includes("razorpay"))
+    .filter((payment) => isPrepaidProvider(payment.provider_id))
+  const providerId = online[0]?.provider_id ?? null
+  const attemptOf = (payment: (typeof online)[number]) => sessionAttempt(payment).ref
 
   const onlinePayments = online
     .map((payment) => {
@@ -89,12 +92,15 @@ export async function loadCancellationContext(
       return { payment_id: payment.id, refundable: roundMoney(captured - refunded), captured }
     })
 
+  // The confirmation step records Razorpay's ids on the order; the payment data names the attempt either way.
+  const razorpay = providerId === RAZORPAY_PROVIDER_ID
   const razorpayPaymentId =
-    typeof order.metadata?.razorpay_payment_id === "string" ? order.metadata.razorpay_payment_id : null
-  const razorpayOrderId =
-    typeof order.metadata?.razorpay_order_id === "string"
-      ? order.metadata.razorpay_order_id
-      : online.map((payment) => payment.data?.razorpayOrder?.id).find((id) => typeof id === "string") ?? null
+    razorpay && typeof order.metadata?.razorpay_payment_id === "string" ? order.metadata.razorpay_payment_id : null
+  const attemptRef =
+    (razorpay && typeof order.metadata?.razorpay_order_id === "string" ? order.metadata.razorpay_order_id : null) ??
+    online.map(attemptOf).find((id): id is string => typeof id === "string") ??
+    null
+  const razorpayOrderId = razorpay ? attemptRef : null
 
   return {
     order_id: order.id,
@@ -110,9 +116,13 @@ export async function loadCancellationContext(
       .map(({ payment_id, refundable }) => ({ payment_id, refundable })),
     paid_online: roundMoney(onlinePayments.reduce((sum, payment) => sum + Math.max(payment.refundable, 0), 0)),
     has_unsettled_online: onlinePayments.some((payment) => payment.captured <= 0),
+    online_provider_id: providerId,
+    payment_ref: razorpayPaymentId,
+    attempt_ref: attemptRef,
+    has_online_payment: online.length > 0,
     razorpay_payment_id: razorpayPaymentId,
     razorpay_order_id: razorpayOrderId,
-    has_razorpay_payment: online.length > 0,
+    has_razorpay_payment: razorpay,
     has_active_fulfillment: (order.fulfillments ?? []).some((fulfillment) => !fulfillment.canceled_at),
   }
 }

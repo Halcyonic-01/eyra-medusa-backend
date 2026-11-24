@@ -397,7 +397,7 @@ medusaIntegrationTestRunner({
         for (const p of razorpay.payments.get(paid.razorpayOrderId) ?? []) p.status = "failed"
 
         const { result } = await repairOrderPaymentWorkflow(container()).run({ input: { order_id: orderId } })
-        expect(result).toMatchObject({ action: "unpaid", reason: "not_paid_at_razorpay" })
+        expect(result).toMatchObject({ action: "unpaid", reason: "not_paid_at_provider" })
         expect(await loadPaymentStanding(container(), orderId)).toMatchObject({ ok: false })
         expect(await dispatchClaim(orderId)).toMatchObject({ claimed: false, reason: "payment_not_confirmed" })
       })

@@ -39,6 +39,15 @@ export type CancellationContext = {
   paid_online: number
   /** An online payment exists that has not been captured. */
   has_unsettled_online: boolean
+  /** The online provider the order was paid with (pp_razorpay_razorpay), or null. */
+  online_provider_id?: string | null
+  /** That provider's payment id, when recorded; refunds go to it. */
+  payment_ref?: string | null
+  /** That provider's attempt, to find the payment when its id was not recorded. */
+  attempt_ref?: string | null
+  /** The order has an online payment of any kind, whichever provider. */
+  has_online_payment?: boolean
+  /** The same as payment_ref and attempt_ref on Razorpay orders. */
   razorpay_payment_id: string | null
   /** Razorpay's order id, to find the payment when its id was not recorded. */
   razorpay_order_id: string | null

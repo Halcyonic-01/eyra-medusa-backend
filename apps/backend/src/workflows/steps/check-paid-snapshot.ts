@@ -1,14 +1,14 @@
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { checkPaidSnapshot } from "../../modules/payment-snapshot/check"
-import { RazorpayUnavailableError } from "../../modules/payment-snapshot/razorpay-api"
+import { GatewayUnavailableError } from "../../modules/payment-snapshot/gateways"
 
 export type CheckPaidSnapshotInput = { cart_id: string; stale_count: number }
 
 /**
  * Before repricing a stale cart: if the customer has already paid for it at the
  * snapshotted price, the prices are held so the paid payment can still become
- * an order. Razorpay is only asked when there is something stale to reprice.
+ * an order. The provider is only asked when there is something stale to reprice.
  */
 export const checkPaidSnapshotStep = createStep(
   "check-paid-snapshot",
@@ -23,10 +23,10 @@ export const checkPaidSnapshotStep = createStep(
       }
       return new StepResponse({ hold_prices: false, reason: verdict.reason })
     } catch (error) {
-      if (!(error instanceof RazorpayUnavailableError)) throw error
+      if (!(error instanceof GatewayUnavailableError)) throw error
       // Unknown is not unpaid: keep the cart as it is. Completion still needs proof of payment.
-      logger.warn(`[paid-price] could not ask Razorpay about cart ${input.cart_id}, not repricing: ${error.message}`)
-      return new StepResponse({ hold_prices: true, reason: "razorpay_unavailable" })
+      logger.warn(`[paid-price] could not ask the payment provider about cart ${input.cart_id}, not repricing: ${error.message}`)
+      return new StepResponse({ hold_prices: true, reason: "provider_unavailable" })
     }
   }
 )

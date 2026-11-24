@@ -1,6 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, MedusaError, Modules } from "@medusajs/framework/utils"
 import { getRefundGateway } from "../order-dispatch/refund-gateway"
+import { RAZORPAY_PROVIDER_ID } from "../payment-snapshot/gateways/ids"
 import { toNumber } from "../wallet/utils"
 import { postToStorefront } from "../../utils/storefront"
 import { sendWhatsapp } from "../../utils/whatsapp"
@@ -232,10 +233,11 @@ export async function refundExchangeDifference(container: Container, requestId: 
   if (!request.fee_paid_at) return true
 
   const amount = toNumber(request.amount_due)
-  const result = await getRefundGateway().refund({
+  const result = await getRefundGateway(RAZORPAY_PROVIDER_ID).refund({
     order_id: request.order_id,
-    razorpay_payment_id: request.fee_payment_id ?? null,
-    razorpay_order_id: null,
+    // Exchange differences are paid by Razorpay payment link.
+    payment_ref: request.fee_payment_id ?? null,
+    attempt_ref: null,
     amount,
     fee: 0,
     cancellation_id: `exchange-${request.id}`,

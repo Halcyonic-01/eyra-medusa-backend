@@ -1,4 +1,5 @@
-import type { RazorpayOrder, RazorpayPayment } from "./rules"
+import type { RazorpayOrder, RazorpayPayment } from "./gateways/razorpay-shape"
+import { GatewayUnavailableError } from "./gateways/types"
 
 /**
  * Read-only Razorpay lookups for the paid-price check: the order and the
@@ -9,7 +10,7 @@ import type { RazorpayOrder, RazorpayPayment } from "./rules"
 const RAZORPAY_API = "https://api.razorpay.com/v1"
 
 /** Razorpay could not be asked (no keys, timeout, 5xx). The answer is unknown, not "unpaid". */
-export class RazorpayUnavailableError extends Error {}
+export class RazorpayUnavailableError extends GatewayUnavailableError {}
 
 function razorpayHeaders(): Record<string, string> {
   const keyId = process.env.RAZORPAY_TEST_KEY_ID ?? process.env.RAZORPAY_ID

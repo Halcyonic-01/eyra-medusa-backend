@@ -28,25 +28,25 @@ export default async function verifyStockCancelRefundHandler({
     }
 
     const context = await loadCancellationContext(container, data.id)
-    if (!context?.has_razorpay_payment) {
+    if (!context?.has_online_payment) {
       return
     }
 
-    const gateway = getRefundGateway()
-    let state = await gateway.paymentRefundState(context.razorpay_payment_id, context.razorpay_order_id)
+    const gateway = getRefundGateway(context.online_provider_id ?? undefined)
+    let state = await gateway.paymentRefundState(context.payment_ref ?? null, context.attempt_ref ?? null)
     // Razorpay can take a moment to show a refund that was just made.
     for (const wait of [3000, 6000]) {
       if (state.status === "known" && state.refunded >= state.amount) {
         return
       }
       await sleep(wait)
-      state = await gateway.paymentRefundState(context.razorpay_payment_id, context.razorpay_order_id)
+      state = await gateway.paymentRefundState(context.payment_ref ?? null, context.attempt_ref ?? null)
     }
     if (state.status === "known" && state.refunded >= state.amount) {
       return
     }
 
-    logger.error(`[cancel] order ${data.id} was cancelled but its Razorpay payment is not fully refunded`)
+    logger.error(`[cancel] order ${data.id} was cancelled but its online payment is not fully refunded`)
     await postToStorefront(
       "/api/ops/notify",
       {

@@ -1,5 +1,6 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { isPrepaidProvider } from "../payment-snapshot/gateways/ids"
 import { ORDER_DISPATCH_MODULE } from "./index"
 import type OrderDispatchModuleService from "./service"
 
@@ -112,10 +113,10 @@ export async function findUncapturedPrepaidOrders(
   return (data as unknown as PaidOrderRow[])
     .filter((order) => !order.metadata?.capture_alerted)
     .filter((order) => {
-      const razorpay = (order.payment_collections ?? [])
+      const online = (order.payment_collections ?? [])
         .flatMap((collection) => collection.payments ?? [])
-        .filter((payment) => (payment.provider_id ?? "").includes("razorpay"))
-      return razorpay.length > 0 && razorpay.some((payment) => (payment.captures ?? []).length === 0)
+        .filter((payment) => isPrepaidProvider(payment.provider_id))
+      return online.length > 0 && online.some((payment) => (payment.captures ?? []).length === 0)
     })
     .slice(0, LIMIT)
     .map((order) => ({ order_id: order.id, display_id: Number(order.display_id) }))
