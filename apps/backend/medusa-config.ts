@@ -73,6 +73,13 @@ module.exports = defineConfig({
                 process.env.RAZORPAY_TEST_WEBHOOK_SECRET ?? process.env.RAZORPAY_WEBHOOK_SECRET,
             },
           },
+          {
+            // PayU hosted checkout, provider id pp_payu_payu. Credentials come from
+            // PAYU_* environment variables (see .env.template). It is only offered
+            // once a region lists pp_payu_payu among its payment providers.
+            resolve: './src/modules/payu-payment',
+            id: 'payu',
+          },
         ],
       },
     },

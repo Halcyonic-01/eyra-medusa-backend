@@ -38,8 +38,8 @@ describe("provider registry", () => {
     process.env.REFUND_GATEWAY = env
   })
 
-  it("knows Razorpay as the only online provider until another is registered", () => {
-    expect(prepaidProviderIds()).toEqual([RAZORPAY_PROVIDER_ID])
+  it("knows Razorpay and PayU as the online providers until another is registered", () => {
+    expect(prepaidProviderIds()).toEqual([RAZORPAY_PROVIDER_ID, "pp_payu_payu"])
     expect(isPrepaidProvider(RAZORPAY_PROVIDER_ID)).toBe(true)
     expect(isPrepaidProvider(COD_PROVIDER_ID)).toBe(false)
     expect(isPrepaidProvider(OTHER)).toBe(false)

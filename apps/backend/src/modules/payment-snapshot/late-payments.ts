@@ -503,14 +503,16 @@ export async function requestSettle(container: MedusaContainer, cartId: string) 
 
 /**
  * Whether money has been taken on any attempt of the cart, current or replaced,
- * on any provider, that is not being given back. Opening another payment then
- * is refused. Throws GatewayUnavailableError when a provider cannot be asked.
+ * on any provider, that is not being given back (opening another payment is
+ * then refused), and which providers still have a payment in progress (one
+ * that may yet succeed). Throws GatewayUnavailableError when a provider cannot
+ * be asked, so an uncertain answer is never read as "unpaid".
  */
 export async function paidAttempts(
   container: MedusaContainer,
   cartId: string,
   sessions: SessionLike[]
-): Promise<{ current: boolean; replaced: boolean }> {
+): Promise<{ current: boolean; replaced: boolean; pending_providers: string[] }> {
   const key = (providerId: string | null | undefined, ref: string) => `${providerId ?? ""}|${ref}`
   const returning = new Set(
     (await lateRows(container, cartId)).filter((row) => row.status !== "recovered").map((row) => key(row.provider_id, rowPaymentRef(row)))
@@ -525,7 +527,7 @@ export async function paidAttempts(
     if (ref && !targets.has(key(attempt.provider_id, ref))) targets.set(key(attempt.provider_id, ref), { provider_id: attempt.provider_id, ref, current: false })
   }
 
-  const found = { current: false, replaced: false }
+  const found = { current: false, replaced: false, pending_providers: [] as string[] }
   for (const target of targets.values()) {
     const gateway = getGateway(target.provider_id)
     if (!gateway) continue
@@ -533,6 +535,9 @@ export async function paidAttempts(
     if (!attempt) continue
     const kept = { ...attempt, payments: attempt.payments.filter((p) => !returning.has(key(target.provider_id, p.id))) }
     if (paidTowardsAttempt(kept) > 0) found[target.current ? "current" : "replaced"] = true
+    if (kept.payments.some((p) => p.attempt_ref === attempt.ref && p.status === "pending") && !found.pending_providers.includes(target.provider_id)) {
+      found.pending_providers.push(target.provider_id)
+    }
   }
   return found
 }

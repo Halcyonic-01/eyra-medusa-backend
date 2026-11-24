@@ -5,10 +5,13 @@
  */
 
 export const RAZORPAY_PROVIDER_ID = "pp_razorpay_razorpay"
+/** PayU hosted checkout (src/modules/payu-payment, id "payu"). */
+export const PAYU_PROVIDER_ID = "pp_payu_payu"
 /** Cash on Delivery: nothing is collected up front. */
 export const COD_PROVIDER_ID = "pp_system_default"
 
-const prepaid = new Set<string>([RAZORPAY_PROVIDER_ID])
+// Listed here, not only when a gateway registers, so checkout rules know them without loading provider code.
+const prepaid = new Set<string>([RAZORPAY_PROVIDER_ID, PAYU_PROVIDER_ID])
 
 export function isPrepaidProvider(providerId: string | null | undefined): boolean {
   return Boolean(providerId) && prepaid.has(providerId as string)

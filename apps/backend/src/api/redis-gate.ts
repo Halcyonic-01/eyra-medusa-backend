@@ -25,6 +25,8 @@ const gated = [
   "/hooks/payment/:provider",
   "/store/carts/:id/complete",
   "/store/carts/:id/razorpay-session",
+  "/store/carts/:id/payu-session",
+  "/store/payu/return",
   "/store/carts/:id/payment-mode",
   "/admin/razorpay-confirmations",
   "/admin/orders/:id/confirmation-email",

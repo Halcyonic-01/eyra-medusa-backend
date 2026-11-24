@@ -1,5 +1,6 @@
 import { registerRefundGateway } from "../../order-dispatch/refund-gateway"
 import { addPrepaidProvider, isPrepaidProvider } from "./ids"
+import { payuGateway } from "./payu"
 import { razorpayGateway } from "./razorpay"
 import type { PrepaidGateway } from "./types"
 
@@ -15,6 +16,9 @@ export function registerGateway(gateway: PrepaidGateway) {
   addPrepaidProvider(gateway.provider_id)
   registerRefundGateway(gateway.provider_id, gateway.refunds())
 }
+
+// PayU (pp_payu_payu). A store only offers it once its region lists the provider.
+registerGateway(payuGateway)
 
 export function getGateway(providerId: string | null | undefined): PrepaidGateway | null {
   if (!providerId || !isPrepaidProvider(providerId)) return null
