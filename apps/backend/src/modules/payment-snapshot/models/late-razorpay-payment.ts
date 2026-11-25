@@ -8,8 +8,10 @@ import { model } from "@medusajs/framework/utils"
  * `status`:
  * - recovered:    the attempt became the cart's order
  * - refunding:    a refund is owed; tried until Razorpay confirms it
- * - refunded:     Razorpay confirmed the refund
+ * - refunded:     the provider accepted the refund (see refund_verified_at for when it was paid out)
  * - needs_review: could not be refunded automatically, a person must look
+ *
+ * A refund the provider later reports as failed goes back to refunding.
  */
 export const LateRazorpayPayment = model
   .define("late_razorpay_payment", {
@@ -34,6 +36,10 @@ export const LateRazorpayPayment = model
     last_error: model.text().nullable(),
     alerted_at: model.dateTime().nullable(),
     resolved_at: model.dateTime().nullable(),
+    /** The provider reported the refund paid out (processed). */
+    refund_verified_at: model.dateTime().nullable(),
+    /** When the refund sweep last asked the provider about the refund. */
+    refund_checked_at: model.dateTime().nullable(),
   })
   .indexes([
     { on: ["cart_id"] },

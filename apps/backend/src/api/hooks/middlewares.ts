@@ -4,13 +4,22 @@ import type {
   MedusaResponse,
   MiddlewareRoute,
 } from "@medusajs/framework/http"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import {
   razorpayWebhookSecret,
+  refundTarget,
+  REFUND_UPDATE_EVENT,
   webhookSignatureValid,
   webhookTarget,
   withSessionId,
 } from "../../modules/payment-snapshot/webhook-guard"
+import {
+  admitWebhookEvent,
+  payuEventKey,
+  razorpayEventKey,
+  type WebhookEventInput,
+} from "../../modules/payment-snapshot/webhook-events"
+import { RAZORPAY_PROVIDER_ID } from "../../modules/payment-snapshot/gateways"
 import { findAttempt } from "../../modules/payment-snapshot/attempts"
 import { requestSettle } from "../../modules/payment-snapshot/late-payments"
 import { PAYU_PROVIDER_ID } from "../../modules/payu-payment/attempt"
@@ -20,6 +29,25 @@ import { resolveWebhookSessionWorkflow } from "../../workflows/resolve-webhook-s
 
 const RAZORPAY_HOOK = "razorpay_razorpay"
 const PAYU_HOOK = "payu_payu"
+
+/**
+ * Records the delivery and answers a duplicate itself (200, so the gateway
+ * stops). True when the caller should act on it. When the record cannot be
+ * made, answers 503 so the gateway delivers again: nothing is dropped.
+ */
+async function admitted(req: MedusaRequest, res: MedusaResponse, input: WebhookEventInput, tag: string): Promise<boolean> {
+  try {
+    const admission = await admitWebhookEvent(req.scope, input)
+    if (admission.action === "handle") return true
+    req.scope.resolve(ContainerRegistrationKeys.LOGGER).info(`${tag} duplicate ${input.event_key} (${admission.reason}); not acted on again`)
+    res.status(200).json({ received: true, acted: false, duplicate: admission.reason })
+    return false
+  } catch (error) {
+    req.scope.resolve(ContainerRegistrationKeys.LOGGER).error(`${tag} could not record ${input.event_key}: ${(error as Error).message}`)
+    res.status(503).json({ message: "Try again" })
+    return false
+  }
+}
 
 /**
  * Guards Medusa's own payment webhooks. Only Razorpay's and PayU's are
@@ -48,10 +76,28 @@ export async function guardPaymentWebhook(req: MedusaRequest, res: MedusaRespons
     return res.status(400).json({ message: "Invalid signature" })
   }
 
+  const refund = refundTarget(req.body)
+  if (refund) {
+    // Only a prompt to ask Razorpay about that refund; the notice itself decides nothing.
+    await req.scope.resolve(Modules.EVENT_BUS).emit({ name: REFUND_UPDATE_EVENT, data: { refund_id: refund.refund_id } })
+    return res.status(200).json({ received: true, acted: false, checking_refund: true })
+  }
+
   const target = webhookTarget(req.body)
   if (!target) {
     return res.status(200).json({ received: true, acted: false })
   }
+  const eventId = req.headers["x-razorpay-event-id"]
+  const event = (cartId: string, outcome: WebhookEventInput["outcome"]): WebhookEventInput => ({
+    provider_id: RAZORPAY_PROVIDER_ID,
+    event_key: razorpayEventKey(target.event, target.razorpay_payment_id, target.razorpay_order_id),
+    event_type: target.event,
+    provider_event_id: typeof eventId === "string" ? eventId : null,
+    attempt_ref: target.razorpay_order_id,
+    cart_id: cartId,
+    outcome,
+    needs_capture: target.event === "payment.captured",
+  })
 
   const { result } = await resolveWebhookSessionWorkflow(req.scope).run({
     input: { razorpay_order_id: target.razorpay_order_id },
@@ -59,6 +105,7 @@ export async function guardPaymentWebhook(req: MedusaRequest, res: MedusaRespons
   if (result.session_id === null) {
     if (result.reason !== "no_snapshot") {
       // A replaced attempt was paid: the settle recovers it into the order or refunds it.
+      if (!(await admitted(req, res, event(result.cart_id, "settling"), "[razorpay-hook]"))) return
       logger.warn(
         `[razorpay-hook] ${target.event} for Razorpay order ${target.razorpay_order_id} is on a replaced attempt of cart ${result.cart_id}; settling it`
       )
@@ -71,6 +118,7 @@ export async function guardPaymentWebhook(req: MedusaRequest, res: MedusaRespons
     return res.status(200).json({ received: true, acted: false, reason: result.reason })
   }
 
+  if (!(await admitted(req, res, event(result.cart_id, "forwarded"), "[razorpay-hook]"))) return
   withSessionId(req.body, result.session_id)
   next()
 }
@@ -102,11 +150,23 @@ export async function guardPayuWebhook(req: MedusaRequest, res: MedusaResponse, 
     logger.warn(`[payu-hook] PayU transaction ${body.txnid} is not one of ours; not processed`)
     return res.status(200).json({ received: true, acted: false, reason: "no_snapshot" })
   }
+  const event = (outcome: WebhookEventInput["outcome"]): WebhookEventInput => ({
+    provider_id: PAYU_PROVIDER_ID,
+    event_key: payuEventKey(body),
+    event_type: `payu.${(body.status ?? "").toLowerCase()}`,
+    attempt_ref: body.txnid ?? null,
+    cart_id: attempt.cart_id,
+    outcome,
+    // PayU's success is a captured payment.
+    needs_capture: (body.status ?? "").toLowerCase() === "success",
+  })
   if (!attempt.session_id) {
+    if (!(await admitted(req, res, event("settling"), "[payu-hook]"))) return
     logger.warn(`[payu-hook] PayU transaction ${body.txnid} is on a replaced attempt of cart ${attempt.cart_id}; settling it`)
     await requestSettle(req.scope, attempt.cart_id)
     return res.status(200).json({ received: true, acted: false, reason: attempt.reason, settling: true })
   }
+  if (!(await admitted(req, res, event("forwarded"), "[payu-hook]"))) return
   body.eyra_session_id = attempt.session_id
   next()
 }

@@ -35,6 +35,8 @@ export const PaymentPriceSnapshot = model
     superseded_at: model.dateTime().nullable(),
     /** When the late-payment sweep last asked Razorpay about this attempt. */
     late_checked_at: model.dateTime().nullable(),
+    /** When the missed-confirmation sweep last asked the provider about this attempt while it was the cart's current one. */
+    reconciled_at: model.dateTime().nullable(),
   })
   .indexes([
     { on: ["cart_id"] },

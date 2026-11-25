@@ -11,13 +11,14 @@ import {
   RAZORPAY_PROVIDER_ID,
   checkoutLockKey,
   getGateway,
+  ownPayments,
   paidTowardsAttempt,
   sessionAttempt,
   type GatewayAttempt,
   type GatewayPayment,
 } from "./gateways"
 import { judgeLateAttempt, type LateDecision } from "./late-payment-rules"
-import { attemptRef, type PaymentSnapshotRecord, type SessionLike } from "./rules"
+import { attemptAmountPaise, attemptRef, type PaymentSnapshotRecord, type SessionLike } from "./rules"
 import type PaymentSnapshotModuleService from "./service"
 
 /**
@@ -42,7 +43,7 @@ const LOCK_SECONDS = 120
 
 type Logger = { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }
 type Snapshot = PaymentSnapshotRecord & { id: string; superseded_at?: Date | null; late_checked_at?: Date | string | null }
-type LateRow = {
+export type LateRow = {
   id: string
   cart_id: string
   provider_id: string
@@ -145,7 +146,7 @@ async function claimSession(container: MedusaContainer, snapshot: Snapshot, sess
   }
 }
 
-async function alertOps(container: MedusaContainer, row: LateRow, kind: "refunded" | "needs_review", detail: string) {
+export async function alertOps(container: MedusaContainer, row: LateRow, kind: "refunded" | "needs_review", detail: string) {
   const razorpay = row.provider_id === RAZORPAY_PROVIDER_ID
   const sent = await postToStorefront(
     "/api/ops/notify",
@@ -261,6 +262,9 @@ async function refundRow(container: MedusaContainer, row: LateRow): Promise<Late
       refund_attempts: attempts,
       last_error: null,
       resolved_at: new Date(),
+      // A new refund (or a re-sent one): followed again from the start until paid out.
+      refund_verified_at: null,
+      refund_checked_at: null,
     })
     logger(container).warn(`[late-payment] refunded ${row.provider_id} payment ${rowPaymentRef(row)} of cart ${row.cart_id} (${row.amount_paise / 100})`)
     await alertOps(container, { ...row, status: "refunded" }, "refunded", "Refunded automatically.")
@@ -477,6 +481,55 @@ async function reviewStaleRecoveries(container: MedusaContainer, rows: LateRow[]
 /** The checkout lock and Medusa's own cart-completion lock (keyed by the cart id), always in that order. */
 function withCartLock<T>(container: MedusaContainer, cartId: string, job: () => Promise<T>): Promise<T> {
   return container.resolve(Modules.LOCKING).execute([checkoutLockKey(cartId), cartId], job, { timeout: LOCK_SECONDS })
+}
+
+export type MissedPaymentOutcome = "adopted" | "authorized" | "ordered" | "not_current" | "pending" | "not_paid" | "mismatch"
+
+/**
+ * A payment on the cart's current attempt that nothing confirmed: no webhook,
+ * no return to the site, no completion. Under the cart's locks, and only while
+ * the cart is not an order and the attempt is still its current one, each
+ * captured payment is recorded as recovered; finishRecoveries then completes
+ * the cart with it, or refunds it if the cart refuses. A payment that is held
+ * but not captured is left to the caller to complete. Amounts that do not
+ * match the attempt go to a person. Throws GatewayUnavailableError when the
+ * provider cannot be asked; nothing is recorded then.
+ */
+export async function adoptMissedPayment(container: MedusaContainer, cartId: string, snapshotId: string): Promise<MissedPaymentOutcome> {
+  return withCartLock(container, cartId, async () => {
+    if (await loadCartOrder(container, cartId)) return "ordered"
+    const snapshot = (await cartAttempts(container, cartId)).find((a) => a.id === snapshotId)
+    const state = await loadCartPaymentState(container, cartId)
+    const current = state?.session ?? null
+    if (!snapshot || snapshot.superseded_at || !current || !sameAttempt(snapshot, attemptRef(snapshot), current, sessionAttempt(current).ref)) {
+      return "not_current"
+    }
+    const gateway = getGateway(snapshot.provider_id)
+    if (!gateway) return "not_current"
+    const fetched = await gateway.fetchAttempt(attemptRef(snapshot))
+    if (!fetched) return "not_paid"
+    const own = ownPayments(fetched)
+    const paid = paidTowardsAttempt(fetched)
+    if (!paid) return own.some((p) => p.status === "pending") ? "pending" : "not_paid"
+
+    const captured = own.filter((p) => p.status === "captured")
+    if (paid !== attemptAmountPaise(snapshot)) {
+      for (const payment of captured) {
+        const row = await rowFor(container, snapshot, payment, { status: "needs_review", reason: "amount_mismatch", order_id: null })
+        if (row.status === "needs_review" && !(row as { alerted_at?: Date | null }).alerted_at) {
+          await alertOps(container, row, "needs_review", `Paid ${paid / 100} towards an attempt of ${attemptAmountPaise(snapshot) / 100}.`)
+        }
+      }
+      logger(container).error(`[missed-payment] cart ${cartId}: ${snapshot.provider_id} attempt ${attemptRef(snapshot)} paid ${paid} paise, expected ${attemptAmountPaise(snapshot)}`)
+      return "mismatch"
+    }
+    if (!captured.length) return "authorized"
+    for (const payment of captured) {
+      await rowFor(container, snapshot, payment, { status: "recovered", reason: "missed_confirmation", order_id: null })
+    }
+    logger(container).warn(`[missed-payment] cart ${cartId}: ${snapshot.provider_id} attempt ${attemptRef(snapshot)} was paid but never confirmed; completing it`)
+    return "adopted"
+  })
 }
 
 /**

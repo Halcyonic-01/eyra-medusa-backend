@@ -442,6 +442,26 @@
           "length": 6,
           "mappedType": "datetime"
         },
+        "refund_verified_at": {
+          "name": "refund_verified_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
+        "refund_checked_at": {
+          "name": "refund_checked_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "length": 6,
+          "mappedType": "datetime"
+        },
         "raw_paid_online": {
           "name": "raw_paid_online",
           "type": "jsonb",
