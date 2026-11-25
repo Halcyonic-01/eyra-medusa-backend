@@ -561,35 +561,58 @@ export async function requestSettle(container: MedusaContainer, cartId: string) 
  * that may yet succeed). Throws GatewayUnavailableError when a provider cannot
  * be asked, so an uncertain answer is never read as "unpaid".
  */
+export type PendingPayment = { provider_id: string; ref: string; current: boolean; since: Date }
+
+export type PaidAttempts = {
+  current: boolean
+  replaced: boolean
+  pending_providers: string[]
+  /** Payments still in progress at a provider, with when their attempt was opened. */
+  pending: PendingPayment[]
+  /** The provider money was taken with, when any. */
+  paid_provider: string | null
+}
+
 export async function paidAttempts(
   container: MedusaContainer,
   cartId: string,
   sessions: SessionLike[]
-): Promise<{ current: boolean; replaced: boolean; pending_providers: string[] }> {
+): Promise<PaidAttempts> {
   const key = (providerId: string | null | undefined, ref: string) => `${providerId ?? ""}|${ref}`
   const returning = new Set(
     (await lateRows(container, cartId)).filter((row) => row.status !== "recovered").map((row) => key(row.provider_id, rowPaymentRef(row)))
   )
+  const attempts = await cartAttempts(container, cartId)
+  const openedAt = new Map(attempts.map((a) => [key(a.provider_id, attemptRef(a)), new Date((a as { created_at?: Date | string }).created_at ?? Date.now())]))
   const targets = new Map<string, { provider_id: string; ref: string; current: boolean }>()
   for (const session of sessions) {
     const { ref } = sessionAttempt(session)
     if (ref && session.provider_id) targets.set(key(session.provider_id, ref), { provider_id: session.provider_id, ref, current: true })
   }
-  for (const attempt of await cartAttempts(container, cartId)) {
+  for (const attempt of attempts) {
     const ref = attemptRef(attempt)
     if (ref && !targets.has(key(attempt.provider_id, ref))) targets.set(key(attempt.provider_id, ref), { provider_id: attempt.provider_id, ref, current: false })
   }
 
-  const found = { current: false, replaced: false, pending_providers: [] as string[] }
+  const found: PaidAttempts = { current: false, replaced: false, pending_providers: [], pending: [], paid_provider: null }
   for (const target of targets.values()) {
     const gateway = getGateway(target.provider_id)
     if (!gateway) continue
     const attempt = await gateway.fetchAttempt(target.ref)
     if (!attempt) continue
     const kept = { ...attempt, payments: attempt.payments.filter((p) => !returning.has(key(target.provider_id, p.id))) }
-    if (paidTowardsAttempt(kept) > 0) found[target.current ? "current" : "replaced"] = true
-    if (kept.payments.some((p) => p.attempt_ref === attempt.ref && p.status === "pending") && !found.pending_providers.includes(target.provider_id)) {
-      found.pending_providers.push(target.provider_id)
+    if (paidTowardsAttempt(kept) > 0) {
+      found[target.current ? "current" : "replaced"] = true
+      found.paid_provider ??= target.provider_id
+    }
+    if (kept.payments.some((p) => p.attempt_ref === attempt.ref && p.status === "pending")) {
+      if (!found.pending_providers.includes(target.provider_id)) found.pending_providers.push(target.provider_id)
+      found.pending.push({
+        provider_id: target.provider_id,
+        ref: target.ref,
+        current: target.current,
+        since: openedAt.get(key(target.provider_id, target.ref)) ?? new Date(),
+      })
     }
   }
   return found
