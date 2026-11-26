@@ -1,7 +1,8 @@
 import { MedusaError } from "@medusajs/framework/utils"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { loadCartPaymentState } from "../../modules/payment-snapshot/check"
-import { paidAttempts, requestSettle } from "../../modules/payment-snapshot/late-payments"
+import { paidAttempts, requestSettle, type PaidAttempts } from "../../modules/payment-snapshot/late-payments"
+import { PENDING_HOLD_MINUTES, pendingRule } from "../../modules/payment-snapshot/payment-standing"
 import { GatewayUnavailableError, RAZORPAY_PROVIDER_ID, getGateway } from "../../modules/payment-snapshot/gateways"
 
 /**
@@ -11,10 +12,12 @@ import { GatewayUnavailableError, RAZORPAY_PROVIDER_ID, getGateway } from "../..
  * would drop the paid one, leaving money taken and no order. A paid replaced
  * attempt is handed to the late-payment settle.
  *
- * It also never lets checkout move to another provider while a payment with
- * a different provider is still in progress, or while any provider cannot be
- * asked (fails closed): the customer waits for that payment to settle.
- * Retrying with the same provider is unchanged.
+ * It also never opens a payment while one is still in progress at a provider,
+ * the same provider included, for PENDING_HOLD_MINUTES: the customer is never
+ * asked to pay again while their payment may still go through. After that a
+ * retry with the same provider is allowed (a late success is refunded), but
+ * switching provider still waits until the payment settles. Nothing is opened
+ * while a provider cannot be asked (fails closed).
  */
 export const guardRazorpayCheckoutStep = createStep(
   "guard-razorpay-checkout",
@@ -25,7 +28,7 @@ export const guardRazorpayCheckoutStep = createStep(
     if (state.cart.completed_at) {
       throw new MedusaError(MedusaError.Types.NOT_ALLOWED, "This cart has already been ordered.")
     }
-    let paid: { current: boolean; replaced: boolean; pending_providers: string[] }
+    let paid: PaidAttempts
     try {
       paid = await paidAttempts(container, input.cart_id, state.prepaidSessions)
     } catch (error) {
@@ -36,13 +39,21 @@ export const guardRazorpayCheckoutStep = createStep(
       )
     }
     if (paid.replaced) await requestSettle(container, input.cart_id)
-    const elsewhere = paid.pending_providers.filter((id) => id !== opening)
-    if (elsewhere.length && !paid.current && !paid.replaced) {
-      const name = getGateway(elsewhere[0])?.name ?? "another payment method"
-      throw new MedusaError(
-        MedusaError.Types.NOT_ALLOWED,
-        `Your payment with ${name} is still being confirmed. Please wait a few minutes before paying another way.`
-      )
+    if (paid.pending.length && !paid.current && !paid.replaced) {
+      const rule = pendingRule(paid.pending, new Date())
+      const name = getGateway(paid.pending[0].provider_id)?.name ?? "another payment method"
+      if (!rule.can_pay) {
+        throw new MedusaError(
+          MedusaError.Types.NOT_ALLOWED,
+          `Your payment with ${name} is still being confirmed. Please don't pay again: it can take up to ${PENDING_HOLD_MINUTES} minutes.`
+        )
+      }
+      if (!rule.allowed.includes(opening)) {
+        throw new MedusaError(
+          MedusaError.Types.NOT_ALLOWED,
+          `Your payment with ${name} is still being confirmed. Please wait for it before paying another way.`
+        )
+      }
     }
     if (paid.current || paid.replaced) {
       throw new MedusaError(
