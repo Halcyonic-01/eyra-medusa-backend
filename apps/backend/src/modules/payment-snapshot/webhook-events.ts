@@ -41,9 +41,13 @@ export function razorpayEventKey(event: string, paymentId: string | null, orderI
   return `${event}:${paymentId ?? orderId}`
 }
 
-/** PayU: the transaction's state and PayU's payment id (a pending notice and a success are different events). */
-export function payuEventKey(fields: { status?: string; mihpayid?: string; txnid?: string }): string {
-  return `${(fields.status ?? "").toLowerCase()}:${fields.mihpayid || fields.txnid || ""}`
+/**
+ * PayU: the transaction's state and our transaction id (a pending notice and a
+ * success are different events). Only fields PayU's hash covers: mihpayid is
+ * not signed, so a replay with it changed must still count as the same notice.
+ */
+export function payuEventKey(fields: { status?: string; txnid?: string }): string {
+  return `${(fields.status ?? "").toLowerCase()}:${fields.txnid ?? ""}`
 }
 
 /**

@@ -55,7 +55,8 @@ module.exports = defineConfig({
       options: {
         providers: [
           {
-            resolve: 'medusa-plugin-razorpay-v2/providers/payment-razorpay/src',
+            // The plugin's provider with EYRA's refund fix (src/modules/razorpay-payment).
+            resolve: './src/modules/razorpay-payment',
             // id must stay "razorpay" — Medusa derives the provider ID as
             // pp_<id>_<id>, and the EYRA frontend hardcodes pp_razorpay_razorpay
             // in app/api/razorpay/create-order/route.ts.

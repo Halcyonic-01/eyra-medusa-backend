@@ -14,7 +14,7 @@ export const PaymentWebhookEvent = model
   .define("payment_webhook_event", {
     id: model.id({ prefix: "pwe" }).primaryKey(),
     provider_id: model.text(),
-    /** e.g. "payment.captured:pay_123" or "success:403993715". */
+    /** e.g. "payment.captured:pay_123" or "success:eyra1a2b3c" (PayU: status and txnid). */
     event_key: model.text(),
     event_type: model.text(),
     /** The provider's own event id, when it sends one. */

@@ -2,6 +2,7 @@ import crypto from "node:crypto"
 import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 import { ContainerRegistrationKeys, ProductStatus } from "@medusajs/framework/utils"
 import {
+  cancelOrderWorkflow,
   createInventoryLevelsWorkflow,
   createProductsWorkflow,
   updateInventoryLevelsWorkflow,
@@ -285,6 +286,18 @@ medusaIntegrationTestRunner({
         expect(await captures(cartId)).toBe(1)
       })
 
+      it("PayU: a genuine notice replayed with an edited (unsigned) mihpayid is still a duplicate", async () => {
+        const cartId = await preparedCart()
+        const opened = await openPayu(cartId)
+        payu.pay(opened.txnid, opened.form.fields.amount, "success")
+        const genuine = payuSigned(opened.form, "success")
+        expect((await payuHook(genuine)).data?.duplicate).toBeUndefined()
+        expect(await payuHook({ ...genuine, mihpayid: "403993715000" })).toMatchObject({ status: 200, data: { duplicate: "in_flight" } })
+        expect(await waitFor(async () => (await ordersFor(cartId)).length === 1)).toBe(true)
+        await wait(6000)
+        expect(await ordersFor(cartId)).toHaveLength(1)
+      })
+
       // ── Missed confirmations ────────────────────────────────────────
 
       it("Razorpay paid but never confirmed: the sweep places the order once, records the capture, and a late webhook is not acted on", async () => {
@@ -304,6 +317,26 @@ medusaIntegrationTestRunner({
         await wait(6000)
         expect(await ordersFor(cartId)).toHaveLength(1)
         expect(await captures(cartId)).toBe(1)
+      })
+
+      it("a backlog of abandoned attempts and a gateway that is down do not delay a fresh missed payment", async () => {
+        // 30 abandoned PayU checkouts from earlier today, PayU unreachable.
+        for (let i = 0; i < 30; i++) {
+          const abandoned = await preparedCart()
+          await openPayu(abandoned)
+          await pg().raw(`UPDATE payment_price_snapshot SET created_at = now() - interval '5 hours' WHERE cart_id = ?`, [abandoned])
+        }
+        payu.state.down = true
+        const cartId = await preparedCart()
+        const orderId = await openRazorpay(cartId)
+        razorpay.pay(orderId)
+        await age(cartId)
+
+        const outcomes = await reconcileCurrentAttempts(container())
+        expect(outcomes[orderId]).toBe("completed")
+        expect(await ordersFor(cartId)).toHaveLength(1)
+        // PayU was asked once this run, not 25 times.
+        expect(Object.values(outcomes).filter((o) => o === "unavailable").length).toBeGreaterThan(0)
       })
 
       it("PayU still pending is left alone; once PayU settles it later, the sweep completes it", async () => {
@@ -365,6 +398,39 @@ medusaIntegrationTestRunner({
         expect(await lateRows(cartId)).toEqual([expect.objectContaining({ status: "needs_review", reason: "amount_mismatch" })])
       })
 
+      it("a refund issued through Medusa (staff Cancel) really reaches Razorpay, at the right amount", async () => {
+        const cartId = await preparedCart()
+        const orderId = await openRazorpay(cartId)
+        const payment = razorpay.pay(orderId)
+        const done = await flow.must(api.post(`/store/carts/${cartId}/complete`, {}, { headers: flow.headers }))
+        await captured(payment)
+        expect(await waitFor(async () => (await captures(cartId)) === 1)).toBe(true)
+
+        await cancelOrderWorkflow(container()).run({ input: { order_id: done.order.id } })
+        // The plugin used to read Medusa's raw amount as NaN and refund nothing while Medusa recorded a refund.
+        expect(refundsOf(orderId)).toEqual([expect.objectContaining({ payment_id: payment.id, amount: 200000 })])
+      })
+
+      it("a Medusa refund Razorpay has no payment for is never recorded as made", async () => {
+        const cartId = await preparedCart()
+        const orderId = await openRazorpay(cartId)
+        const payment = razorpay.pay(orderId)
+        const done = await flow.must(api.post(`/store/carts/${cartId}/complete`, {}, { headers: flow.headers }))
+        await captured(payment)
+        expect(await waitFor(async () => (await captures(cartId)) === 1)).toBe(true)
+        // Razorpay no longer lists a captured payment on the order (refunded elsewhere, say).
+        payment.status = "refunded"
+
+        // Medusa's cancel logs a refund error and still cancels; the refund must simply not be recorded.
+        await cancelOrderWorkflow(container()).run({ input: { order_id: done.order.id }, throwOnError: false })
+        expect(refundsOf(orderId)).toHaveLength(0)
+        const { rows } = await pg().raw(
+          `SELECT count(*)::int AS n FROM refund r JOIN payment p ON p.id = r.payment_id JOIN order_payment_collection o ON o.payment_collection_id = p.payment_collection_id WHERE o.order_id = ?`,
+          [done.order.id]
+        )
+        expect(rows[0].n).toBe(0)
+      })
+
       // ── Refunds the provider fails later ────────────────────────────
 
       it("a refund Razorpay later fails is sent again exactly once, then followed until it is paid out", async () => {
@@ -397,7 +463,13 @@ medusaIntegrationTestRunner({
           status: 200,
           data: { checking_refund: true },
         })
-        expect(await waitFor(async () => (await lateRows(cartId))[0]?.status === "refunding")).toBe(true)
+        // Owed again, or already re-sent under a new refund id if the late-payment job ran in between.
+        expect(
+          await waitFor(async () => {
+            const [row] = await lateRows(cartId)
+            return row?.status === "refunding" || (row?.status === "refunded" && Boolean(row.refund_id) && row.refund_id !== refund.id)
+          })
+        ).toBe(true)
         // An unsigned notice is refused and changes nothing.
         const unsigned = await send("/hooks/payment/razorpay_razorpay", JSON.stringify({ event: "refund.failed", payload: {} }), {
           "content-type": "application/json",

@@ -1,7 +1,8 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { PAYMENT_SNAPSHOT_MODULE } from "."
-import { loadCartPaymentState } from "./check"
-import { GatewayUnavailableError, getGateway } from "./gateways"
+import { loadCartPaymentState, snapshotFor } from "./check"
+import { GatewayUnavailableError, RAZORPAY_PROVIDER_ID, getGateway, ownPayments, paidTowardsAttempt, sessionAttempt } from "./gateways"
+import { snapshotMatchesCart } from "./rules"
 import { loadCartOrder, paidAttempts, type PaidAttempts, type PendingPayment } from "./late-payments"
 import type PaymentSnapshotModuleService from "./service"
 
@@ -52,6 +53,12 @@ export type PaymentStanding = {
   /** Whether a new online payment may be opened now, and with which providers ("pending" past the hold: same provider only). */
   can_pay: boolean
   allowed_providers: string[] | "any"
+  /**
+   * The pending payment is on the cart's current Razorpay order and the cart is
+   * unchanged: paying again continues that same order, which Razorpay lets be
+   * paid only once, so it cannot charge twice.
+   */
+  resume: boolean
   refunds: StandingRefund[]
 }
 
@@ -71,7 +78,7 @@ export function judgeStanding(
   input: { cart_id: string; order_id: string | null; paid: PaidAttempts | null; refunds: StandingRefund[] },
   now: Date = new Date()
 ): PaymentStanding {
-  const base = { cart_id: input.cart_id, order_id: input.order_id, refunds: input.refunds, pending_since: null, retry_after: null }
+  const base = { cart_id: input.cart_id, order_id: input.order_id, refunds: input.refunds, pending_since: null, retry_after: null, resume: false }
   if (input.order_id) {
     return { ...base, state: "ordered", provider_id: null, provider_name: null, can_pay: false, allowed_providers: [] }
   }
@@ -115,6 +122,42 @@ async function cartRefunds(container: MedusaContainer, cartId: string): Promise<
     }))
 }
 
+export type ResumableAttempt = { payment_collection_id: string; payment_session_id: string; razorpay_order_id: string; amount: number }
+
+/**
+ * The cart's current Razorpay order, when it may be paid again as it is: the
+ * cart and its session still match what the order was opened for, nothing has
+ * been taken on it, and a payment on it is still in limbo at Razorpay
+ * ("created": a failed or abandoned netbanking or UPI try that Razorpay keeps
+ * open). Razorpay accepts one successful payment per order, so the customer
+ * continues the same order instead of opening a second one. Null otherwise,
+ * also when Razorpay cannot be asked.
+ */
+export async function resumableRazorpayAttempt(container: MedusaContainer, cartId: string): Promise<ResumableAttempt | null> {
+  const state = await loadCartPaymentState(container, cartId)
+  const session = state?.session
+  if (!state || state.cart.completed_at || !session || session.provider_id !== RAZORPAY_PROVIDER_ID) return null
+  const ref = sessionAttempt(session).ref
+  const snapshot = await snapshotFor(container, session.id)
+  if (!ref || !snapshot || !snapshotMatchesCart(snapshot, state.cart, session, ref).honoured) return null
+  let attempt
+  try {
+    attempt = await getGateway(RAZORPAY_PROVIDER_ID)?.fetchAttempt(ref)
+  } catch (error) {
+    if (error instanceof GatewayUnavailableError) return null
+    throw error
+  }
+  if (!attempt || paidTowardsAttempt(attempt) > 0) return null
+  if ((attempt.raw as { status?: string } | null)?.status === "paid") return null
+  if (!ownPayments(attempt).some((p) => p.status === "pending")) return null
+  return {
+    payment_collection_id: state.cart.payment_collection?.id ?? "",
+    payment_session_id: session.id,
+    razorpay_order_id: ref,
+    amount: snapshot.amount_paise / 100,
+  }
+}
+
 /** Null when the cart does not exist. */
 export async function cartPaymentStanding(container: MedusaContainer, cartId: string, now: Date = new Date()): Promise<PaymentStanding | null> {
   const state = await loadCartPaymentState(container, cartId)
@@ -128,5 +171,11 @@ export async function cartPaymentStanding(container: MedusaContainer, cartId: st
   } catch (error) {
     if (!(error instanceof GatewayUnavailableError)) throw error
   }
-  return judgeStanding({ cart_id: cartId, order_id: null, paid, refunds }, now)
+  const standing = judgeStanding({ cart_id: cartId, order_id: null, paid, refunds }, now)
+  if (standing.state === "pending" && standing.provider_id === RAZORPAY_PROVIDER_ID && paid?.pending.every((p) => p.provider_id === RAZORPAY_PROVIDER_ID)) {
+    if (await resumableRazorpayAttempt(container, cartId)) {
+      return { ...standing, can_pay: true, allowed_providers: [RAZORPAY_PROVIDER_ID], resume: true }
+    }
+  }
+  return standing
 }
