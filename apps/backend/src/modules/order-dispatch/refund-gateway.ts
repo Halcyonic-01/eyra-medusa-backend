@@ -1,4 +1,5 @@
 import { RAZORPAY_PROVIDER_ID } from "../payment-snapshot/gateways/ids"
+import { fakeRefundsAllowed } from "../payment-snapshot/payment-config"
 
 /**
  * How a refund to the customer's original payment method is made, one
@@ -305,6 +306,7 @@ function unsupported(providerId: string): RefundGateway {
 /** The refunds of a payment provider; Razorpay when none is given, which is every order before other providers. */
 export function getRefundGateway(providerId: string = RAZORPAY_PROVIDER_ID): RefundGateway {
   const mode = (process.env.REFUND_GATEWAY ?? "").trim().toLowerCase()
-  if (mode.startsWith("fake")) return fakeGateway(mode)
+  // The stand-ins report refunds that never happened: tests only, never in production.
+  if (mode.startsWith("fake") && fakeRefundsAllowed(process.env)) return fakeGateway(mode)
   return providers.get(providerId) ?? unsupported(providerId)
 }

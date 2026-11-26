@@ -1,3 +1,5 @@
+import { payuLiveProblems } from "../payment-snapshot/payment-config"
+
 /**
  * PayU credentials and endpoints, from the environment only. PAYU_MODE picks
  * PayU's test or live hosts; the *_URL overrides exist for local fakes in tests.
@@ -25,6 +27,8 @@ export function payuConfig(env: NodeJS.ProcessEnv = process.env): PayuConfig | n
   const key = env.PAYU_MERCHANT_KEY?.trim()
   const salt = env.PAYU_MERCHANT_SALT?.trim()
   if (!key || !salt) return null
+  // Live mode with an override outside PayU or a plain-http return address: off, never half-on.
+  if (payuLiveProblems(env).length) return null
   const mode = env.PAYU_MODE?.trim().toLowerCase() === "live" ? "live" : "test"
   return {
     key,

@@ -1,4 +1,5 @@
 import { fileStorageProblems } from "../../utils/file-storage"
+import { paymentConfigProblems } from "../payment-snapshot/payment-config"
 import { jwtExpiry } from "../../utils/jwt-expiry"
 import { redisProblems } from "../../utils/redis-modules"
 
@@ -45,6 +46,7 @@ export function dispatchConfigProblems(): string[] {
   }
   problems.push(...fileStorageProblems(process.env))
   problems.push(...redisProblems(process.env))
+  problems.push(...paymentConfigProblems(process.env))
 
   // The backend's own Shiprocket token only prices live courier rates, which
   // customers are not charged (prepaid ships free, Cash on Delivery has its own

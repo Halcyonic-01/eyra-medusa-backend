@@ -29,6 +29,7 @@ process.env.REFUND_GATEWAY = ""
 process.env.STOREFRONT_REVALIDATE_URL = ""
 process.env.STOREFRONT_REVALIDATE_SECRET = ""
 process.env.ORDER_DISPATCH_ENABLED = "false"
+process.env.PAYMENT_STATUS_CACHE_MS = "0"
 
 jest.setTimeout(300000)
 
@@ -123,13 +124,30 @@ medusaIntegrationTestRunner({
         expect((await openPayu(cartId)).ok).toBe(true)
       })
 
-      it("Razorpay pending (a UPI request not approved yet) blocks a Razorpay retry too", async () => {
+      it("a Razorpay try stuck in 'created' continues the same Razorpay order, never a second one, and blocks switching", async () => {
         const cartId = await preparedCart()
         const opened = await openRazorpay(cartId)
         const order = opened.ok ? (opened.data.razorpay_order_id as string) : ""
+        // What Razorpay keeps after a failed or abandoned netbanking or UPI try.
         razorpay.payments.set(order, [{ id: "pay_PENDING1", entity: "payment", order_id: order, amount: 200000, currency: "INR", status: "created" as never }])
 
-        expect(await standing(cartId)).toMatchObject({ state: "pending", provider_name: "Razorpay", can_pay: false })
+        expect(await standing(cartId)).toMatchObject({ state: "pending", provider_name: "Razorpay", resume: true, can_pay: true, allowed_providers: [RAZORPAY] })
+        const retry = await openRazorpay(cartId)
+        expect(retry.ok && retry.data).toMatchObject({ razorpay_order_id: order, resumed: true })
+        expect((await pg().raw(`SELECT count(*)::int AS n FROM payment_price_snapshot WHERE cart_id = ?`, [cartId])).rows[0].n).toBe(1)
+        const switched = await openPayu(cartId)
+        expect(switched.ok).toBe(false)
+        expect(switched.message).toMatch(/still being confirmed/)
+      })
+
+      it("no resume once the cart changed: the stuck try then holds every new payment", async () => {
+        const cartId = await preparedCart()
+        const opened = await openRazorpay(cartId)
+        const order = opened.ok ? (opened.data.razorpay_order_id as string) : ""
+        razorpay.payments.set(order, [{ id: "pay_PENDING2", entity: "payment", order_id: order, amount: 200000, currency: "INR", status: "created" as never }])
+        await flow.must(api.post(`/store/carts/${cartId}/line-items`, { variant_id: fx.variantByPrice[2000], quantity: 1 }, { headers: flow.headers }))
+
+        expect(await standing(cartId)).toMatchObject({ state: "pending", resume: false, can_pay: false })
         const retry = await openRazorpay(cartId)
         expect(retry.ok).toBe(false)
         expect(retry.message).toMatch(/still being confirmed/)
@@ -157,6 +175,33 @@ medusaIntegrationTestRunner({
         razorpay.state.down = true
         expect(await standing(cartId)).toMatchObject({ state: "unknown", can_pay: false })
         expect((await openPayu(cartId)).ok).toBe(false)
+      })
+
+      it("Cash on Delivery cannot complete while an online payment is still pending, even calling the store API directly", async () => {
+        const cartId = await preparedCart()
+        const opened = await openPayu(cartId)
+        const txnid = opened.ok ? (opened.data.txnid as string) : ""
+        payu.pay(txnid, "2000.00", "pending")
+
+        // Straight to Medusa's public routes: switch the cart to Cash on Delivery and complete it.
+        await flow.setMode(cartId, "cod")
+        const collection = await flow.must(api.post("/store/payment-collections", { cart_id: cartId }, { headers: flow.headers }))
+        await flow.must(
+          api.post(`/store/payment-collections/${collection.payment_collection.id}/payment-sessions`, { provider_id: "pp_system_default" }, { headers: flow.headers })
+        )
+        const refused = await flow.attempt(api.post(`/store/carts/${cartId}/complete`, {}, { headers: flow.headers }))
+        expect(refused.ok).toBe(false)
+        expect(refused.message).toMatch(/PayU is still being confirmed/)
+
+        // PayU down: still refused, never guessed.
+        payu.state.down = true
+        expect((await flow.attempt(api.post(`/store/carts/${cartId}/complete`, {}, { headers: flow.headers }))).message).toMatch(/couldn't check/)
+        payu.state.down = false
+
+        // PayU says it failed: nothing was taken, so Cash on Delivery goes ahead.
+        payu.pay(txnid, "2000.00", "failure")
+        const placed = await flow.attempt(api.post(`/store/carts/${cartId}/complete`, {}, { headers: flow.headers }))
+        expect(placed.ok && placed.data.type).toBe("order")
       })
 
       it("a refund shows as refunded, then as paid out once the provider pays it", async () => {
