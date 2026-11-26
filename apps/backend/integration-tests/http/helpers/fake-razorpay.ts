@@ -104,6 +104,10 @@ export async function startFakeRazorpay(port: number) {
         if (state.refund === "lost") return json(504, { error: { code: "GATEWAY_ERROR" } })
         return json(200, refund)
       }
+      if ((match = path.match(/^\/v1\/payments\/([^/]+)\/refunds\/([^/]+)$/)) && req.method === "GET") {
+        const refund = refunds.find((r) => r.payment_id === match![1] && r.id === match![2])
+        return refund ? json(200, refund) : json(404, { error: { code: "BAD_REQUEST_ERROR" } })
+      }
       if ((match = path.match(/^\/v1\/payments\/([^/]+)\/refunds$/)) && req.method === "GET") {
         const items = refunds.filter((r) => r.payment_id === match![1])
         return json(200, { entity: "collection", count: items.length, items })

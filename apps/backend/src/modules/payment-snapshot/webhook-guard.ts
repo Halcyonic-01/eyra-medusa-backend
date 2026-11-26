@@ -40,6 +40,18 @@ export function webhookTarget(body: unknown): WebhookTarget | null {
   }
 }
 
+/** Razorpay's refund notices; they only trigger a check of that refund with Razorpay, never an action by themselves. */
+export const REFUND_EVENTS = ["refund.processed", "refund.failed"]
+export const REFUND_UPDATE_EVENT = "eyra.payment_refund_update"
+
+/** The refund a refund notice is about, or null. */
+export function refundTarget(body: unknown): { event: string; refund_id: string } | null {
+  const data = body as { event?: unknown; payload?: { refund?: { entity?: { id?: unknown } } } } | null
+  const event = typeof data?.event === "string" ? data.event : ""
+  const id = data?.payload?.refund?.entity?.id
+  return REFUND_EVENTS.includes(event) && typeof id === "string" && id ? { event, refund_id: id } : null
+}
+
 /**
  * Writes the backend's own session id into the parsed event, replacing anything
  * the browser put in the notes. Only the parsed body changes: the raw bytes the

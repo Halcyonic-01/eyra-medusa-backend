@@ -17,6 +17,9 @@ import { model } from "@medusajs/framework/utils"
  * - credited:   the refund was added to the customer's wallet
  * - failed:     the refund could not be made; staff can retry it
  * - unverified: it was sent, but the provider could not confirm it; staff must check
+ *
+ * An initiated refund is checked with the provider until it is paid out
+ * (refund_verified_at); one the provider reports as failed becomes failed.
  */
 export const OrderCancellation = model
   .define("order_cancellation", {
@@ -44,6 +47,10 @@ export const OrderCancellation = model
     /** Minutes between the order being placed and cancelled, to tune the window. */
     cancelled_after_minutes: model.number().nullable(),
     completed_at: model.dateTime().nullable(),
+    /** The provider reported the refund paid out. */
+    refund_verified_at: model.dateTime().nullable(),
+    /** When the refund sweep last asked the provider. */
+    refund_checked_at: model.dateTime().nullable(),
   })
   .indexes([
     {

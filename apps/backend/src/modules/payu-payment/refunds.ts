@@ -1,4 +1,12 @@
-import type { PaymentRefundState, RefundGateway, RefundRequest, RefundResult } from "../order-dispatch/refund-gateway"
+import {
+  refundOutcomeOf,
+  type PaymentRefundState,
+  type RefundGateway,
+  type RefundLookup,
+  type RefundOutcome,
+  type RefundRequest,
+  type RefundResult,
+} from "../order-dispatch/refund-gateway"
 import { paymentActions, PayuUnavailableError, requestRefund, verifyPayment } from "./api"
 import { formatAmount, refundToken, toPaise } from "./hash"
 
@@ -6,8 +14,14 @@ import { formatAmount, refundToken, toPaise } from "./hash"
  * Refunds to the customer's PayU payment, once per refund however often asked:
  * the PayU token is derived from the caller's own refund id, PayU refuses a
  * token twice, and PayU is searched for that token before anything is sent.
- * Never throws (see RefundGateway).
+ * A refund PayU later failed keeps its token (PayU never accepts it again), so
+ * a retry uses the next token of the same refund; one still live under any of
+ * them is never sent again. Never throws (see RefundGateway).
  */
+
+/** How many times a refund may be sent after PayU failed the earlier ones. */
+const MAX_TOKENS = 5
+const tokensFor = (refundKey: string) => Array.from({ length: MAX_TOKENS }, (_, n) => refundToken(n ? `${refundKey}#${n}` : refundKey))
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const LIVE = (status: string) => status !== "failure" && status !== "failed"
@@ -19,11 +33,20 @@ async function mihpayidFor(request: { payment_ref: string | null; attempt_ref: s
   return detail?.mihpayid ? String(detail.mihpayid) : null
 }
 
-/** The refund PayU already has for this token, or null. Throws when PayU cannot be asked. */
-async function existingRefund(mihpayid: string, token: string): Promise<string | null> {
-  const actions = await paymentActions(mihpayid)
-  const match = actions.find((action) => action.action === "refund" && action.token === token && LIVE(action.status))
-  return match ? match.request_id : null
+/**
+ * The refund PayU already has for this refund under any of its tokens (live:
+ * queued or paid out), else the first token PayU has never seen. Throws when
+ * PayU cannot be asked.
+ */
+async function existingRefund(mihpayid: string, refundKey: string): Promise<{ live: string | null; next: string | null }> {
+  const refunds = (await paymentActions(mihpayid)).filter((action) => action.action === "refund")
+  for (const token of tokensFor(refundKey)) {
+    const mine = refunds.filter((action) => action.token === token)
+    const live = mine.find((action) => LIVE(action.status))
+    if (live) return { live: live.request_id, next: null }
+    if (!mine.length) return { live: null, next: token }
+  }
+  return { live: null, next: null }
 }
 
 async function refund(request: RefundRequest): Promise<RefundResult> {
@@ -35,10 +58,12 @@ async function refund(request: RefundRequest): Promise<RefundResult> {
   }
   if (!mihpayid) return { ok: false, error: "The PayU payment for this order could not be found", may_have_moved_money: false }
 
-  const token = refundToken(request.cancellation_id)
+  let token: string
   try {
-    const before = await existingRefund(mihpayid, token)
-    if (before) return { ok: true, refund_id: before, verified: true }
+    const before = await existingRefund(mihpayid, request.cancellation_id)
+    if (before.live) return { ok: true, refund_id: before.live, verified: true }
+    if (!before.next) return { ok: false, error: `PayU failed this refund ${MAX_TOKENS} times`, may_have_moved_money: false }
+    token = before.next
   } catch (error) {
     return { ok: false, error: `PayU could not be checked, so no refund was sent: ${(error as Error).message}`, may_have_moved_money: false }
   }
@@ -57,8 +82,8 @@ async function refund(request: RefundRequest): Promise<RefundResult> {
   for (const wait of [1000, 2000, 4000]) {
     await sleep(wait)
     try {
-      const after = await existingRefund(mihpayid, token)
-      if (after) return { ok: true, refund_id: after, verified: true }
+      const after = await existingRefund(mihpayid, request.cancellation_id)
+      if (after.live) return { ok: true, refund_id: after.live, verified: true }
     } catch {
       // Still unknown; try again.
     }
@@ -80,4 +105,15 @@ async function paymentRefundState(paymentRef: string | null, attemptRef: string 
   }
 }
 
-export const payuRefunds: RefundGateway = { refund, paymentRefundState }
+async function refundStatus(lookup: RefundLookup): Promise<RefundOutcome> {
+  try {
+    const mihpayid = await mihpayidFor(lookup)
+    if (!mihpayid) return "unknown"
+    const action = (await paymentActions(mihpayid)).find((a) => a.action === "refund" && a.request_id === lookup.refund_id)
+    return action ? refundOutcomeOf(action.status) : "unknown"
+  } catch {
+    return "unknown"
+  }
+}
+
+export const payuRefunds: RefundGateway = { refund, paymentRefundState, refundStatus }

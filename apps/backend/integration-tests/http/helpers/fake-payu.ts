@@ -21,7 +21,7 @@ export type FakeTxn = {
   unmappedstatus: string
 }
 
-export type FakePayuRefund = { request_id: string; mihpayid: string; token: string; amount: string }
+export type FakePayuRefund = { request_id: string; mihpayid: string; token: string; amount: string; status: string }
 
 export function createFakePayu() {
   const txns = new Map<string, FakeTxn>()
@@ -58,7 +58,7 @@ export function createFakePayu() {
       if (state.refund === "refuse") return { status: 200, body: { status: 0, msg: "Refund request failed" } }
       if (refunds.some((r) => r.token === token)) return { status: 200, body: { status: 0, msg: "token already used or request pending" } }
       if (![...txns.values()].some((t) => t.mihpayid === mihpayid)) return { status: 200, body: { status: 0, msg: "transaction not exists" } }
-      const refund = { request_id: `${++state.seq}000`, mihpayid, token, amount }
+      const refund = { request_id: `${++state.seq}000`, mihpayid, token, amount, status: "queued" }
       refunds.push(refund)
       if (state.refund === "lost") return { status: 504, body: "gateway timeout" }
       return { status: 200, body: { status: 1, msg: "Refund Request Queued", request_id: refund.request_id, mihpayid } }
@@ -73,7 +73,7 @@ export function createFakePayu() {
           status: 1,
           msg: "1 out of 1 Transactions Fetched Successfully",
           transaction_details: {
-            [mihpayid]: Object.fromEntries(mine.map((r) => [r.request_id, { mihpayid, request_id: r.request_id, amt: r.amount, action: "refund", token: r.token, status: "queued" }])),
+            [mihpayid]: Object.fromEntries(mine.map((r) => [r.request_id, { mihpayid, request_id: r.request_id, amt: r.amount, action: "refund", token: r.token, status: r.status }])),
           },
         },
       }

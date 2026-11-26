@@ -30,6 +30,14 @@ export type RefundResult =
   | { ok: true; refund_id: string | null; verified: boolean }
   | { ok: false; error: string; may_have_moved_money: boolean }
 
+/**
+ * Where a refund the provider accepted stands: paid out, still on its way,
+ * failed at the provider (the money did not go back), or not known right now.
+ */
+export type RefundOutcome = "processed" | "pending" | "failed" | "unknown"
+
+export type RefundLookup = { payment_ref: string | null; attempt_ref: string | null; refund_id: string }
+
 export type PaymentRefundState =
   | { status: "known"; amount: number; refunded: number }
   | { status: "unknown" }
@@ -44,6 +52,17 @@ export interface RefundGateway {
    * refused or nothing was sent.
    */
   refund(request: RefundRequest): Promise<RefundResult>
+  /** Where an accepted refund stands now. Never throws; "unknown" when the provider cannot be asked. */
+  refundStatus(lookup: RefundLookup): Promise<RefundOutcome>
+}
+
+/** A provider's refund status, in the terms above. Anything not clearly paid out or failed is still on its way. */
+export function refundOutcomeOf(status: string | null | undefined): RefundOutcome {
+  const value = (status ?? "").toLowerCase()
+  if (!value) return "unknown"
+  if (["processed", "success", "successful", "completed", "refunded"].includes(value)) return "processed"
+  if (["failed", "failure", "cancelled", "canceled", "rejected"].includes(value)) return "failed"
+  return "pending"
 }
 
 const RAZORPAY_API = "https://api.razorpay.com/v1"
@@ -228,8 +247,27 @@ async function refundAtRazorpay(request: RefundRequest): Promise<RefundResult> {
   return { ok: false, error: sent.error, may_have_moved_money: sent.kind === "unclear" }
 }
 
+async function razorpayRefundStatus(lookup: RefundLookup): Promise<RefundOutcome> {
+  const auth = razorpayAuth()
+  if (!auth) return "unknown"
+  const paymentId = lookup.payment_ref ?? (await paymentForOrder(auth, lookup.attempt_ref))
+  if (!paymentId) return "unknown"
+  try {
+    const res = await fetch(`${RAZORPAY_API}/payments/${encodeURIComponent(paymentId)}/refunds/${encodeURIComponent(lookup.refund_id)}`, {
+      headers: { Authorization: auth },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) return "unknown"
+    return refundOutcomeOf(((await res.json()) as { status?: string }).status)
+  } catch {
+    return "unknown"
+  }
+}
+
 function fakeGateway(mode: string): RefundGateway {
   return {
+    // Tests only: FAKE_REFUND_STATUS plays the provider's later verdict on a refund.
+    refundStatus: async () => refundOutcomeOf(process.env.FAKE_REFUND_STATUS || "processed"),
     paymentRefundState: async () =>
       mode === "fake_unrefunded" ? { status: "known", amount: 1000, refunded: 0 } : { status: "known", amount: 1000, refunded: 1000 },
     refund: async (request) => {
@@ -247,7 +285,7 @@ function fakeGateway(mode: string): RefundGateway {
   }
 }
 
-const razorpayRefunds: RefundGateway = { refund: refundAtRazorpay, paymentRefundState: paymentState }
+const razorpayRefunds: RefundGateway = { refund: refundAtRazorpay, paymentRefundState: paymentState, refundStatus: razorpayRefundStatus }
 const providers = new Map<string, RefundGateway>([[RAZORPAY_PROVIDER_ID, razorpayRefunds]])
 
 /** Adds the refund implementation of another payment provider. */
@@ -259,6 +297,7 @@ export function registerRefundGateway(providerId: string, gateway: RefundGateway
 function unsupported(providerId: string): RefundGateway {
   return {
     paymentRefundState: async () => ({ status: "unknown" }),
+    refundStatus: async () => "unknown",
     refund: async () => ({ ok: false, error: `No refunds are set up for payment provider ${providerId}`, may_have_moved_money: false }),
   }
 }

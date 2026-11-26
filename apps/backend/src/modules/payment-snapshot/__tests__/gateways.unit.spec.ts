@@ -20,6 +20,7 @@ const OTHER = "pp_otherpay_otherpay"
 const otherRefunds: RefundGateway = {
   paymentRefundState: async () => ({ status: "known", amount: 1, refunded: 0 }),
   refund: async (request) => ({ ok: true, refund_id: `other_${request.payment_ref}`, verified: true }),
+  refundStatus: async () => "processed",
 }
 
 const otherGateway: PrepaidGateway = {

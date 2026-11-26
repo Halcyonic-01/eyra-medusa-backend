@@ -54,6 +54,7 @@ function fakeOtherPay() {
     },
     refunds: () => ({
       paymentRefundState: async () => ({ status: "unknown" }),
+      refundStatus: async () => "processed" as const,
       async refund(request) {
         if (state.refund === "refuse") return { ok: false, error: "OtherPay refused", may_have_moved_money: false }
         // Idempotent per tag, like a real provider lookup.

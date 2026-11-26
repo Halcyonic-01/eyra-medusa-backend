@@ -21,6 +21,7 @@ process.env.PAYU_MERCHANT_KEY = FAKE_PAYU_KEY
 process.env.PAYU_MERCHANT_SALT = FAKE_PAYU_SALT
 process.env.PAYU_MODE = "test"
 process.env.PAYU_API_URL = `http://127.0.0.1:${PAYU_PORT}/merchant/postservice.php?form=2`
+process.env.PAYU_CHECKOUT_URL = ""
 process.env.PAYU_SUCCESS_URL = "https://eyra.test/payu/ok"
 process.env.PAYU_FAILURE_URL = "https://eyra.test/payu/no"
 process.env.REFUND_GATEWAY = ""
