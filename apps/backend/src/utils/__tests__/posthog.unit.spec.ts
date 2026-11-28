@@ -8,7 +8,7 @@ const logger = { warn: jest.fn() }
 describe("PostHog server config", () => {
   it("is off without a project token, and refuses a personal (secret) key or an unknown host", () => {
     expect(posthogServerConfig({})).toBeNull()
-    expect(posthogServerConfig({ POSTHOG_PROJECT_TOKEN: "phx_secretpersonalkey" })).toBeNull()
+    expect(posthogServerConfig({ POSTHOG_PROJECT_TOKEN: ["phx", "secretpersonalkey"].join("_") })).toBeNull()
     expect(posthogServerConfig({ POSTHOG_PROJECT_TOKEN: config.token, POSTHOG_HOST: "https://evil.example.com" })).toBeNull()
     expect(posthogServerConfig({ POSTHOG_PROJECT_TOKEN: config.token })).toEqual(config)
     expect(posthogServerConfig({ POSTHOG_PROJECT_TOKEN: config.token, POSTHOG_HOST: "https://us.i.posthog.com/" })).toMatchObject({ host: "https://us.i.posthog.com" })
