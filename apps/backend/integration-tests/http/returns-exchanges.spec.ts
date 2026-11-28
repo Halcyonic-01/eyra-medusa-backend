@@ -635,6 +635,10 @@ medusaIntegrationTestRunner({
           // Shipped now, not held: it has a dispatch record of its own.
           const [dispatch] = await (getContainer().resolve("orderDispatch") as any).listOrderDispatches({ order_id: row.replacement_order_id }, { take: 1 })
           expect(dispatch).toBeTruthy()
+          // Really shipped, with a tax invoice number of its own (not the original order's).
+          expect(dispatch.state).toBe("shipped")
+          expect(dispatch.invoice_number).toMatch(/^EYRA\/\d\d-\d\d\/\d{5}$/)
+          expect(dispatch.invoice_number).not.toBe(placed.invoiceNumber)
           // The replacement cost more, so there is no credit to give back.
           expect(await credits(placed.orderId)).toHaveLength(0)
           expect(storefront.callsTo("/api/whatsapp/send").some((c) => c.body.template === "replacement_dispatched")).toBe(true)

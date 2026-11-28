@@ -136,6 +136,22 @@ export async function markDispatchFailed(
 }
 
 /**
+ * The next number in a financial year's one unbroken invoice series. Run it
+ * inside the transaction that uses the number, so a rolled-back use frees it.
+ */
+export async function nextInvoiceSeq(trx: Pg, fy: string): Promise<number> {
+  const counter = await trx.raw(
+    `INSERT INTO invoice_counter (id, fy, last_seq, created_at, updated_at)
+          VALUES (?, ?, 1, now(), now())
+     ON CONFLICT (fy) WHERE deleted_at IS NULL
+       DO UPDATE SET last_seq = invoice_counter.last_seq + 1, updated_at = now()
+       RETURNING last_seq`,
+    [generateEntityId(undefined, "invc"), fy]
+  )
+  return Number(counter.rows[0].last_seq)
+}
+
+/**
  * Records the finished shipment and issues the tax invoice number in the same
  * transaction. If the order is no longer `dispatching` nothing is changed and
  * the number is not used, so the series has no gaps.
@@ -151,15 +167,7 @@ export async function markShipped(
   try {
     return await pg.transaction(async (trx) => {
       const fy = financialYearLabel(now)
-      const counter = await trx.raw(
-        `INSERT INTO invoice_counter (id, fy, last_seq, created_at, updated_at)
-              VALUES (?, ?, 1, now(), now())
-         ON CONFLICT (fy) WHERE deleted_at IS NULL
-           DO UPDATE SET last_seq = invoice_counter.last_seq + 1, updated_at = now()
-           RETURNING last_seq`,
-        [generateEntityId(undefined, "invc"), fy]
-      )
-      const seq = Number(counter.rows[0].last_seq)
+      const seq = await nextInvoiceSeq(trx, fy)
 
       const result = await trx.raw(
         `UPDATE order_dispatch

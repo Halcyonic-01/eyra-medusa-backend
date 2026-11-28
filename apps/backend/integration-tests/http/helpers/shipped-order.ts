@@ -1,5 +1,8 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { financialYearLabel, formatInvoiceNumber } from "../../../src/modules/order-dispatch/invoice"
+import { invoicePrefix } from "../../../src/modules/order-dispatch/config"
+import { nextInvoiceSeq } from "../../../src/modules/order-dispatch/transitions"
 import type { LaunchFixtures } from "./launch-fixtures"
 import type { checkoutFlow } from "./checkout-flow"
 
@@ -37,6 +40,12 @@ export async function shippedOrder(
   const displayId = Number((data[0] as any).display_id)
 
   seq += 1
+  // The invoice number comes from the real counter, as markShipped takes it, so an
+  // order the test later ships for real (an exchange's replacement) never reuses it.
+  const issuedAt = new Date("2026-10-15T05:00:00Z")
+  const fy = financialYearLabel(issuedAt)
+  const pg = container.resolve(ContainerRegistrationKeys.PG_CONNECTION) as any
+  const invoiceSeq = await nextInvoiceSeq(pg, fy)
   const dispatch = container.resolve("orderDispatch") as any
   // With dispatch switched on, an event handler makes the row a moment after the order.
   let existing: any = null
@@ -54,10 +63,10 @@ export async function shippedOrder(
     shiprocket_order_id: `SR-${seq}`,
     shiprocket_shipment_id: `SHIP-${seq}`,
     awb_code: `AWB${seq}`,
-    invoice_fy: "26-27",
-    invoice_seq: seq,
-    invoice_number: `EYRA/26-27/${String(seq).padStart(5, "0")}`,
-    invoice_issued_at: new Date("2026-10-15T05:00:00Z"),
+    invoice_fy: fy,
+    invoice_seq: invoiceSeq,
+    invoice_number: formatInvoiceNumber(invoicePrefix(), fy, invoiceSeq),
+    invoice_issued_at: issuedAt,
   }
   const row = existing
     ? await dispatch.updateOrderDispatches({ id: existing.id, ...fields })
