@@ -1,6 +1,8 @@
 import { loadEnv, defineConfig, Modules, ContainerRegistrationKeys } from '@medusajs/framework/utils'
 import { fileModuleEntry, resolveFileStorage } from './src/utils/file-storage'
 import { redisModules } from './src/utils/redis-modules'
+import { logger } from '@medusajs/framework/logger'
+import { reportingLogger } from './src/utils/sentry'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
@@ -9,6 +11,8 @@ loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 const fileModule = fileModuleEntry(resolveFileStorage(process.env))
 
 module.exports = defineConfig({
+  // Medusa's logger; its errors also go to Sentry when SENTRY_DSN is set (src/utils/sentry.ts).
+  logger: reportingLogger(logger),
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
     // Required in production. This alone does not move the event bus, workflow
